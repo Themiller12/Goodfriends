@@ -1,0 +1,13 @@
+# Autoriser l'accès aux fichiers PHP
+<Files ~ "\.(php)$">
+    Order allow,deny
+    Allow from all
+</Files>
+
+# Garder les paramètres de requête
+RewriteEngine Off
+
+# Activer les headers CORS
+Header always set Access-Control-Allow-Origin "*"
+Header always set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+Header always set Access-Control-Allow-Headers "Content-Type, Authorization"

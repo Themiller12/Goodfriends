@@ -1,0 +1,303 @@
+import ApiClient from './ApiClient';
+import NotificationService from './NotificationService';
+import AppState from './AppState';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import CacheService from './CacheService';
+
+export interface MessageReaction {
+  emoji: string;
+  userId: string;
+}
+
+export interface Message {
+  id: string;
+  senderId: string;
+  receiverId: string;
+  message: string | null;
+  photoUrl?: string | null;
+  isRead: boolean;
+  createdAt: string;
+  senderEmail?: string;
+  receiverEmail?: string;
+  reactions?: MessageReaction[];
+  replyToId?: string | null;
+  replyToMessage?: string | null;
+  replyToSenderId?: string | null;
+}
+
+export interface Conversation {
+  otherUserId: string;
+  otherUserEmail: string;
+  otherUserFirstName: string | null;
+  otherUserLastName: string | null;
+  otherUserPhone: string | null;
+  lastMessage: string;
+  lastMessageTime: string;
+  unreadCount: number;
+}
+
+class MessageService {
+  private lastCheckedMessageId: string | null = null;
+
+  /**
+   * Envoyer un message à un utilisateur
+   */
+  async sendMessage(receiverId: string, message: string, replyToId?: string): Promise<Message> {
+    try {
+      const response = await ApiClient.post('/messages.php?action=send', {
+        receiverId,
+        message,
+        ...(replyToId ? {replyToId} : {}),
+      }) as any;
+      
+      // Invalider le cache des conversations pour forcer un rechargement
+      await CacheService.invalidateCache('conversations');
+      
+      return response.data;
+    } catch (error) {
+      console.error('Erreur lors de l\'envoi du message:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Envoyer une photo dans un message (base64, compressée côté client)
+   */
+  async sendPhoto(receiverId: string, photoBase64: string, mimeType: string, caption?: string, replyToId?: string): Promise<Message> {
+    try {
+      const response = await ApiClient.post('/messages.php?action=send-photo', {
+        receiverId,
+        photoData: photoBase64,
+        mimeType,
+        caption: caption || null,
+        ...(replyToId ? {replyToId} : {}),
+      }) as any;
+
+      await CacheService.invalidateCache('conversations');
+      return response.data;
+    } catch (error) {
+      console.error('Erreur lors de l\'envoi de la photo:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Récupérer l'historique des messages avec un utilisateur
+   */
+  async getConversation(otherUserId: string, before?: string): Promise<Message[]> {
+    try {
+      const url = before
+        ? `/messages.php?action=conversation&otherUserId=${otherUserId}&before=${encodeURIComponent(before)}`
+        : `/messages.php?action=conversation&otherUserId=${otherUserId}`;
+      const response = await ApiClient.get(url) as any;
+      return response.data;
+    } catch (error) {
+      console.error('Erreur lors de la récupération de la conversation:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Vérifier les nouveaux messages et afficher des notifications
+   */
+  async checkNewMessages(): Promise<void> {
+    try {
+      console.log('[MessageService] Checking new messages...');
+      
+      // Récupérer l'utilisateur actuel depuis AsyncStorage
+      const userStr = await AsyncStorage.getItem('@current_user');
+      if (!userStr) {
+        console.log('[MessageService] No user logged in (@current_user not found)');
+        return;
+      }
+      
+      const currentUser = JSON.parse(userStr);
+      const currentUserId = currentUser.id;
+      
+      if (!currentUserId) {
+        console.log('[MessageService] No user ID found in current user object');
+        return;
+      }
+      
+      console.log(`[MessageService] Current user ID: ${currentUserId}`);
+      
+      const conversations = await this.getConversations();
+      console.log(`[MessageService] Found ${conversations.length} conversations`);
+      
+      // Récupérer les IDs des messages déjà notifiés
+      const notifiedMessagesStr = await AsyncStorage.getItem('@notified_messages');
+      const notifiedMessages: string[] = notifiedMessagesStr 
+        ? JSON.parse(notifiedMessagesStr) 
+        : [];
+      
+      console.log(`[MessageService] Previously notified messages: ${notifiedMessages.length}`);
+      
+      let newNotificationsCount = 0;
+      
+      for (const conversation of conversations) {
+        if (conversation.unreadCount > 0) {
+          console.log(`[MessageService] Conversation with ${conversation.otherUserEmail} has ${conversation.unreadCount} unread messages`);
+          
+          // Ne pas notifier si cette conversation est actuellement ouverte
+          if (AppState.isChatOpen(conversation.otherUserId)) {
+            console.log(`[MessageService] Chat with ${conversation.otherUserId} is currently open, skipping notification`);
+            continue;
+          }
+          
+          try {
+            // Récupérer les messages de cette conversation
+            const messages = await this.getConversation(conversation.otherUserId);
+            
+            // Trouver les nouveaux messages non lus
+            const unreadMessages = messages.filter(
+              msg => !msg.isRead && msg.receiverId === currentUserId && !notifiedMessages.includes(msg.id)
+            );
+            
+            console.log(`[MessageService] Found ${unreadMessages.length} new unread messages to notify`);
+            
+            // Afficher une notification pour chaque nouveau message non notifié
+            for (const message of unreadMessages) {
+              const senderName = (conversation.otherUserFirstName && conversation.otherUserLastName)
+                ? `${conversation.otherUserFirstName} ${conversation.otherUserLastName}`
+                : conversation.otherUserEmail;
+              
+              console.log(`[MessageService] Showing notification for message from ${senderName}`);
+              
+              await NotificationService.showMessageNotification(
+                senderName,
+                conversation.otherUserEmail,
+                message.message ?? null,
+                conversation.otherUserId,
+                conversation.otherUserFirstName ?? undefined,
+                conversation.otherUserLastName ?? undefined,
+              );
+              
+              // Marquer comme notifié
+              notifiedMessages.push(message.id);
+              newNotificationsCount++;
+            }
+          } catch (convError) {
+            console.error(`[MessageService] Error processing conversation with ${conversation.otherUserId}:`, convError);
+            // Continue avec les autres conversations
+          }
+        }
+      }
+      
+      console.log(`[MessageService] Sent ${newNotificationsCount} new notifications`);
+      
+      // Sauvegarder la liste mise à jour des messages notifiés
+      // Garder seulement les 100 derniers pour éviter que la liste ne grossisse indéfiniment
+      const recentNotified = notifiedMessages.slice(-100);
+      await AsyncStorage.setItem('@notified_messages', JSON.stringify(recentNotified));
+    } catch (error: any) {
+      // Ne pas afficher d'erreur si c'est juste un problème d'authentification
+      if (error?.response?.status === 401) {
+        console.log('[MessageService] Skipping message check - user not authenticated');
+      } else {
+        console.error('[MessageService] Erreur lors de la vérification des nouveaux messages:', error);
+      }
+    }
+  }
+
+  /**
+   * Marquer tous les messages d'un utilisateur comme lus
+   */
+  async markAsRead(otherUserId: string): Promise<void> {
+    try {
+      await ApiClient.put('/messages.php?action=mark-read', {
+        otherUserId,
+      });
+      
+      // Invalider le cache des conversations pour forcer un rechargement
+      await CacheService.invalidateCache('conversations');
+    } catch (error) {
+      console.error('Erreur lors du marquage des messages comme lus:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Récupérer la liste des conversations
+   */
+  async getConversations(): Promise<Conversation[]> {
+    try {
+      // Essayer de récupérer depuis le cache d'abord
+      const cachedConversations = await CacheService.getCachedConversations();
+      const isCacheValid = await CacheService.isConversationsCacheValid();
+      
+      // Si le cache est valide, le retourner
+      if (cachedConversations && isCacheValid) {
+        console.log('[MessageService] Using cached conversations');
+        // Lancer une mise à jour en arrière-plan
+        this.updateConversationsCache().catch(err => 
+          console.error('[MessageService] Background update failed:', err)
+        );
+        return cachedConversations;
+      }
+      
+      // Sinon, récupérer depuis l'API
+      const response = await ApiClient.get('/messages.php?action=conversations') as any;
+      const conversations = response.data;
+      
+      // Mettre à jour le cache
+      await CacheService.cacheConversations(conversations);
+      
+      return conversations;
+    } catch (error) {
+      console.error('Erreur lors de la récupération des conversations:', error);
+      
+      // En cas d'erreur, essayer de retourner le cache
+      const cachedConversations = await CacheService.getCachedConversations();
+      if (cachedConversations) {
+        console.log('[MessageService] Error, using cached conversations as fallback');
+        return cachedConversations;
+      }
+      
+      throw error;
+    }
+  }
+
+  /**
+   * Mettre à jour le cache des conversations en arrière-plan
+   */
+  private async updateConversationsCache(): Promise<void> {
+    try {
+      const response = await ApiClient.get('/messages.php?action=conversations') as any;
+      await CacheService.cacheConversations(response.data);
+      console.log('[MessageService] Background cache update completed');
+    } catch (error) {
+      console.error('[MessageService] Background cache update failed:', error);
+    }
+  }
+
+  /**
+   * Ajouter / basculer une réaction à un message
+   */
+  async reactToMessage(messageId: string, emoji: string): Promise<void> {
+    try {
+      await ApiClient.post('/messages.php?action=react', {messageId, emoji});
+    } catch (error) {
+      console.error('Erreur lors de la réaction au message:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Récupérer le nombre total de messages non lus
+   */
+  async getUnreadCount(): Promise<number> {
+    try {
+      console.log('[MessageService] Getting unread count...');
+      const response = await ApiClient.get('/messages.php?action=unread-count') as any;
+      console.log('[MessageService] Unread count response:', response);
+      const count = response.data?.count || 0;
+      console.log(`[MessageService] Unread count result: ${count}`);
+      return count;
+    } catch (error) {
+      console.error('[MessageService] Erreur lors de la récupération du nombre de messages non lus:', error);
+      throw error;
+    }
+  }
+}
+
+export default new MessageService();
