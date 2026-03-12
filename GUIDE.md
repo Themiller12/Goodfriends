@@ -1,141 +1,97 @@
-# Guide de démarrage - Goodfriends
+This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
 
-## ✅ Application créée avec succès!
+# Getting Started
 
-L'application Goodfriends est maintenant prête à être lancée.
+> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
 
-## 🚀 Lancement de l'application
+## Step 1: Start Metro
 
-### Pour Android:
-1. Assurez-vous qu'un émulateur Android est lancé ou qu'un appareil est connecté
-2. Exécutez:
-```bash
+First, you will need to run **Metro**, the JavaScript build tool for React Native.
+
+To start the Metro dev server, run the following command from the root of your React Native project:
+
+```sh
+# Using npm
+npm start
+
+# OR using Yarn
+yarn start
+```
+
+## Step 2: Build and run your app
+
+With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
+
+### Android
+
+```sh
+# Using npm
 npm run android
+
+# OR using Yarn
+yarn android
 ```
 
-### Pour iOS (macOS uniquement):
-1. Installez d'abord les pods:
-```bash
-cd ios && pod install && cd ..
+### iOS
+
+For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
+
+The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
+
+```sh
+bundle install
 ```
-2. Lancez l'application:
-```bash
+
+Then, and every time you update your native dependencies, run:
+
+```sh
+bundle exec pod install
+```
+
+For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
+
+```sh
+# Using npm
 npm run ios
+
+# OR using Yarn
+yarn ios
 ```
 
-## 📱 Utilisation de l'application
+If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
 
-### Première utilisation:
-1. **Créer un compte**: Cliquez sur "Pas encore de compte ? Inscrivez-vous"
-2. Remplissez vos informations (nom, prénom, email, mot de passe)
-3. Vous serez automatiquement connecté
+This is one way to run your app — you can also build it directly from Android Studio or Xcode.
 
-### Fonctionnalités principales:
+## Step 3: Modify your app
 
-#### 👤 Profil utilisateur
-- Accédez à votre profil via le bouton "Profil" en haut à droite
-- Ajoutez vos informations personnelles
-- Créez et gérez vos groupes de contacts
+Now that you have successfully run the app, let's make changes!
 
-#### ➕ Ajouter des contacts
-- Cliquez sur le bouton "+" en bas à droite de l'écran d'accueil
-- Remplissez les informations du contact
-- Ajoutez-le à un groupe si vous le souhaitez
+Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
 
-#### 🔍 Rechercher des contacts
-- Utilisez la barre de recherche sur l'écran d'accueil
-- Recherchez par nom ou prénom
+When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
 
-#### 📊 Visualisation
-- **Mode Graphe**: Visualisez vos contacts sous forme de bulles
-- **Mode Liste**: Affichez vos contacts dans une liste classique
-- Cliquez sur un contact pour voir ses informations synthétisées
+- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
+- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
 
-#### 👨‍👩‍👧‍👦 Groupes
-- Créez des groupes (Famille, Amis, Travail, Autre)
-- Organisez vos contacts par groupes
-- Gérez vos groupes depuis votre profil
+## Congratulations! :tada:
 
-## 🛠️ Développement
+You've successfully run and modified your React Native App. :partying_face:
 
-### Structure des fichiers:
-```
-src/
-├── navigation/          # Configuration de la navigation
-│   └── AppNavigator.tsx
-├── screens/            # Écrans de l'application
-│   ├── LoginScreen.tsx
-│   ├── RegisterScreen.tsx
-│   ├── HomeScreen.tsx
-│   ├── AddContactScreen.tsx
-│   ├── ContactDetailScreen.tsx
-│   ├── ProfileScreen.tsx
-│   └── GroupsScreen.tsx
-├── services/           # Logique métier
-│   ├── AuthService.ts
-│   ├── StorageService.ts
-│   └── ContactService.ts
-└── types/             # Types TypeScript
-    └── index.ts
-```
+### Now what?
 
-### Données stockées localement:
-- Compte utilisateur
-- Profil utilisateur
-- Contacts
-- Groupes
+- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
+- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
 
-Toutes les données sont stockées avec AsyncStorage et persistent entre les sessions.
+# Troubleshooting
 
-## 🔧 Dépendances installées:
-- `@react-navigation/native` - Navigation
-- `@react-navigation/native-stack` - Stack navigation
-- `react-native-screens` - Optimisation des écrans
-- `react-native-safe-area-context` - Gestion des zones sûres
-- `@react-native-async-storage/async-storage` - Stockage local
-- `@react-native-community/datetimepicker` - Sélecteur de dates
-- `@react-native-picker/picker` - Sélecteur de valeurs
+If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
 
-## 📝 Prochaines améliorations possibles:
+# Learn More
 
-1. **Photos de profil et contacts**
-   - Utiliser `react-native-image-picker`
-   - Stocker les images en base64 ou dans le système de fichiers
+To learn more about React Native, take a look at the following resources:
 
-2. **Graphe de relations amélioré**
-   - Utiliser `react-native-svg` et `d3` pour des visualisations plus riches
-   - Afficher les liens entre contacts
-
-3. **Relations familiales avancées**
-   - Créer un écran dédié pour gérer les relations
-   - Permettre d'ajouter des relations directement depuis le détail d'un contact
-
-4. **Export/Import de données**
-   - Exporter en JSON
-   - Importer des contacts depuis le carnet d'adresses du téléphone
-
-5. **Notifications**
-   - Rappels pour les anniversaires
-   - Utiliser `react-native-push-notification`
-
-6. **Synchronisation cloud**
-   - Firebase ou autre backend
-   - Synchronisation multi-appareils
-
-## 🐛 Debugging
-
-Si l'application ne se lance pas:
-1. Vérifiez que Metro est en cours d'exécution
-2. Nettoyez le cache: `npx react-native start --reset-cache`
-3. Pour Android: `cd android && ./gradlew clean && cd ..`
-4. Pour iOS: `cd ios && pod install && cd ..`
-
-## 📚 Ressources
-
-- [Documentation React Native](https://reactnative.dev/)
-- [React Navigation](https://reactnavigation.org/)
-- [AsyncStorage](https://react-native-async-storage.github.io/async-storage/)
-
----
-
-Bonne utilisation de Goodfriends! 🎉
+- [React Native Website](https://reactnative.dev) - learn more about React Native.
+- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
+- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
+- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
+- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
