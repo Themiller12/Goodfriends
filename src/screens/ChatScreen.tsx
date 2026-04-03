@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -21,12 +21,11 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  Appbar,
-  IconButton,
-  Card,
   Text,
   ActivityIndicator,
 } from 'react-native-paper';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import {Neutral, Spacing, Radius, Typography} from '../theme/designSystem';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {launchImageLibrary} from 'react-native-image-picker';
@@ -34,8 +33,16 @@ import {useTheme} from '../context/ThemeContext';
 import MessageService, { Message, MessageReaction } from '../services/MessageService';
 import AuthService from '../services/AuthService';
 import AppState from '../services/AppState';
+import OnlineStatusService from '../services/OnlineStatusService';
+import OnlineIndicator from '../components/OnlineIndicator';
 
-const REACTIONS = ['❤️', '👍', '👎', '😲', '😡'];
+const REACTIONS = [
+  {key: 'love',    icon: 'favorite',                    color: '#e53935'},
+  {key: 'like',    icon: 'thumb-up',                    color: '#1976D2'},
+  {key: 'dislike', icon: 'thumb-down',                  color: '#9E9E9E'},
+  {key: 'wow',     icon: 'sentiment-very-satisfied',    color: '#FB8C00'},
+  {key: 'angry',   icon: 'sentiment-very-dissatisfied', color: '#e53935'},
+];
 
 const SwipeableMessage: React.FC<{
   onSwipeRight: () => void;
@@ -88,7 +95,7 @@ const SwipeableMessage: React.FC<{
           justifyContent: 'center',
           opacity: iconOpacity,
         }}>
-        <Text style={{fontSize: 18}}>↩️</Text>
+        <MaterialIcons name="reply" size={18} color="#555" />
       </Animated.View>
       <Animated.View
         style={{transform: [{translateX}]}}
@@ -110,6 +117,7 @@ type ChatScreenRouteProp = RouteProp<{
 
 const ChatScreen: React.FC = () => {
   const {theme} = useTheme();
+  const s = useMemo(() => styles(theme), [theme]);
   const navigation = useNavigation();
   const route = useRoute<ChatScreenRouteProp>();
   const insets = useSafeAreaInsets();
@@ -138,6 +146,7 @@ const ChatScreen: React.FC = () => {
   const [loadingMore, setLoadingMore] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [networkError, setNetworkError] = useState(false);
+  const [isOtherUserOnline, setIsOtherUserOnline] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const pollingIntervalRef = useRef<number | null>(null);
   const prevMessagesCountRef = useRef<number>(0);
@@ -153,9 +162,18 @@ const ChatScreen: React.FC = () => {
     // Indiquer que cette conversation est ouverte
     AppState.setCurrentOpenChat(otherUserId);
 
+    // Charger le statut en ligne de l'interlocuteur
+    OnlineStatusService.getStatuses([otherUserId]).then(r => setIsOtherUserOnline(r[otherUserId] ?? false));
+
     // Keyboard height tracking (Android only)
     const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
-      if (Platform.OS === 'android') setKeyboardHeight(e.endCoordinates.height + insets.bottom);
+      if (Platform.OS === 'android') {
+        setKeyboardHeight(e.endCoordinates.height + insets.bottom);
+        // Faire remonter les messages au-dessus du clavier
+        setTimeout(() => {
+          flatListRef.current?.scrollToEnd({ animated: true });
+        }, 80);
+      }
     });
     const hideSub = Keyboard.addListener('keyboardDidHide', () => {
       if (Platform.OS === 'android') setKeyboardHeight(0);
@@ -397,11 +415,31 @@ const ChatScreen: React.FC = () => {
 
   const handleReact = async (messageId: string, emoji: string) => {
     setReactionPickerMsg(null);
+    // Mise à jour optimiste : on ajoute/retire la réaction immédiatement
+    setMessages(prev => prev.map(m => {
+      if (m.id !== messageId) return m;
+      const reactions = [...(m.reactions ?? [])];
+      const existingIdx = reactions.findIndex(r => r.userId === currentUserId && r.emoji === emoji);
+      if (existingIdx !== -1) {
+        reactions.splice(existingIdx, 1); // toggle off
+      } else {
+        // retirer toute autre réaction du user sur ce message, puis ajouter
+        const filtered = reactions.filter(r => r.userId !== currentUserId);
+        filtered.push({ userId: currentUserId, emoji, messageId, createdAt: new Date().toISOString() } as any);
+        return { ...m, reactions: filtered };
+      }
+      return { ...m, reactions };
+    }));
     try {
       await MessageService.reactToMessage(messageId, emoji);
+      suppressAutoScrollRef.current = true;
       loadMessages(true);
+      setTimeout(() => { suppressAutoScrollRef.current = false; }, 500);
     } catch (error) {
       console.error('Erreur lors de la réaction:', error);
+      suppressAutoScrollRef.current = true;
+      loadMessages(true);
+      setTimeout(() => { suppressAutoScrollRef.current = false; }, 500);
     }
   };
 
@@ -474,9 +512,9 @@ const ChatScreen: React.FC = () => {
     return (
       <View
         style={[
-          styles.messageContainer,
-          isMyMessage ? styles.myMessageContainer : styles.otherMessageContainer,
-          item.replyToId ? styles.messageContainerFullWidth : null,
+          s.messageContainer,
+          isMyMessage ? s.myMessageContainer : s.otherMessageContainer,
+          item.replyToId ? s.messageContainerFullWidth : null,
         ]}
       >
         <SwipeableMessage onSwipeRight={() => setReplyingTo(item)}>
@@ -485,26 +523,26 @@ const ChatScreen: React.FC = () => {
             onLongPress={() => setReactionPickerMsg(item)}
             delayLongPress={350}
           >
-            <Card
+            <View
               style={[
-                styles.messageCard,
-                isMyMessage ? styles.myMessageCard : styles.otherMessageCard,
-                item.photoUrl ? styles.photoMessageCard : null,
-                item.replyToId ? styles.messageCardFullWidth : null,
+                s.messageCard,
+                isMyMessage ? s.myMessageCard : s.otherMessageCard,
+                item.photoUrl ? s.photoMessageCard : null,
+                item.replyToId ? s.messageCardFullWidth : null,
               ]}
             >
-              <Card.Content style={item.photoUrl ? styles.photoCardContent : undefined}>
+              <View style={item.photoUrl ? s.photoCardContent : {paddingHorizontal: 12, paddingVertical: 8}}>
                 {item.replyToId && (
-                  <TouchableOpacity style={styles.replyQuoteBubble} onPress={() => scrollToMessage(item.replyToId!)} activeOpacity={0.7}>
-                    <View style={[styles.replyQuoteBar, {backgroundColor: theme.primary}]} />
-                    <View style={styles.replyQuoteContent}>
-                      <Text style={[styles.replyQuoteAuthor, {color: theme.primary}]}>
+                  <TouchableOpacity style={s.replyQuoteBubble} onPress={() => scrollToMessage(item.replyToId!)} activeOpacity={0.7}>
+                    <View style={[s.replyQuoteBar, {backgroundColor: theme.primary}]} />
+                    <View style={s.replyQuoteContent}>
+                      <Text style={[s.replyQuoteAuthor, {color: theme.primary}]}>
                         {item.replyToSenderId === currentUserId
                           ? 'Vous'
                           : formatUserName(otherUserFirstName, otherUserLastName, otherUserEmail)}
                       </Text>
-                      <Text style={styles.replyQuoteText} numberOfLines={2}>
-                        {item.replyToMessage ?? '📷 Photo'}
+                      <Text style={s.replyQuoteText} numberOfLines={2}>
+                        {item.replyToMessage ?? '[Photo]'}
                       </Text>
                     </View>
                   </TouchableOpacity>
@@ -513,35 +551,48 @@ const ChatScreen: React.FC = () => {
                   <TouchableOpacity onPress={() => setLightboxUri(item.photoUrl!)}>
                     <Image
                       source={{uri: item.photoUrl}}
-                      style={styles.messagePhoto}
+                      style={s.messagePhoto}
                       resizeMode="cover"
                     />
                   </TouchableOpacity>
                 )}
                 {item.message ? (
-                  renderMessageText(item.message, [styles.messageText, item.photoUrl ? styles.captionText : null])
+                  renderMessageText(item.message, [s.messageText, item.photoUrl ? s.captionText : null])
                 ) : null}
-                <View style={styles.messageTimeRow}>
-                  <Text style={styles.messageTime}>{formatTime(item.createdAt)}</Text>
+                <View style={s.messageTimeRow}>
+                  <Text style={s.messageTime}>{formatTime(item.createdAt)}</Text>
                   {isMyMessage && (
-                    <Text style={[styles.messageTime, {color: item.isRead ? '#4FC3F7' : '#aaa', marginLeft: 3}]}>
-                      {item.isRead ? '✓✓' : '✓'}
-                    </Text>
+                    <MaterialIcons
+                      name={item.isRead ? 'done-all' : 'done'}
+                      size={14}
+                      color={item.isRead ? '#4FC3F7' : '#aaa'}
+                      style={{marginLeft: 3}}
+                    />
                   )}
                 </View>
-              </Card.Content>
-            </Card>
+              </View>
+            </View>
           </TouchableOpacity>
         </SwipeableMessage>
         {aggregatedReactions.length > 0 && (
-          <View style={[styles.reactionsRow, isMyMessage ? styles.reactionsRight : styles.reactionsLeft]}>
+          <View style={[s.reactionsRow, isMyMessage ? s.reactionsRight : s.reactionsLeft]}>
             {aggregatedReactions.map(r => (
               <TouchableOpacity
                 key={r.emoji}
-                style={[styles.reactionBadge, r.myReaction ? styles.myReactionBadge : null]}
+                style={[s.reactionBadge, r.myReaction ? s.myReactionBadge : null]}
                 onPress={() => handleReact(item.id, r.emoji)}
               >
-                <Text style={styles.reactionText}>{r.emoji}{r.count > 1 ? ` ${r.count}` : ''}</Text>
+                {(() => {
+                    const def = REACTIONS.find(rx => rx.key === r.emoji);
+                    return def ? (
+                      <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                        <MaterialIcons name={def.icon as any} size={14} color={r.myReaction ? def.color : '#555'} />
+                        {r.count > 1 && <Text style={[s.reactionText, {marginLeft: 2}]}>{r.count}</Text>}
+                      </View>
+                    ) : (
+                      <Text style={s.reactionText}>{r.emoji}{r.count > 1 ? ` ${r.count}` : ''}</Text>
+                    );
+                  })()}
               </TouchableOpacity>
             ))}
           </View>
@@ -552,13 +603,15 @@ const ChatScreen: React.FC = () => {
 
   if (loading) {
     return (
-      <View style={styles.container}>
-        <Appbar.Header style={{backgroundColor: theme.primary}}>
-          <Appbar.BackAction onPress={() => navigation.goBack()} color="#fff" />
-          <Appbar.Content title={formatUserName(otherUserFirstName, otherUserLastName, otherUserEmail)} titleStyle={{color: '#fff'}} />
-        </Appbar.Header>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" />
+      <View style={s.container}>
+        <View style={s.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={s.backButton}>
+            <MaterialIcons name="arrow-back" size={22} color="#FFF" />
+          </TouchableOpacity>
+          <Text style={s.headerName}>{formatUserName(otherUserFirstName, otherUserLastName, otherUserEmail)}</Text>
+        </View>
+        <View style={s.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.primary} />
         </View>
       </View>
     );
@@ -566,21 +619,28 @@ const ChatScreen: React.FC = () => {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={s.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <View style={[styles.inner, Platform.OS === 'android' ? {paddingBottom: keyboardHeight} : null]}>
-      <Appbar.Header style={{backgroundColor: theme.primary}}>
-        <Appbar.BackAction onPress={() => navigation.goBack()} color="#fff" />
-        <Appbar.Content title={formatUserName(otherUserFirstName, otherUserLastName, otherUserEmail)} titleStyle={{color: '#fff'}} />
-      </Appbar.Header>
+      <View style={[s.inner, Platform.OS === 'android' ? {paddingBottom: keyboardHeight} : null]}>
+      <View style={s.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={s.backButton}>
+          <MaterialIcons name="arrow-back" size={22} color="#FFF" />
+        </TouchableOpacity>
+        <View style={{flex: 1}}>
+          <Text style={s.headerName}>{formatUserName(otherUserFirstName, otherUserLastName, otherUserEmail)}</Text>
+          {isOtherUserOnline && (
+            <RNText style={s.headerOnline}>● En ligne</RNText>
+          )}
+        </View>
+      </View>
 
       <FlatList
         ref={flatListRef}
         data={messages}
         renderItem={renderMessage}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.messagesList}
+        contentContainerStyle={s.messagesList}
         maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
         onContentSizeChange={() => {
           if (!suppressAutoScrollRef.current) {
@@ -593,83 +653,79 @@ const ChatScreen: React.FC = () => {
         ListHeaderComponent={
           hasMore ? (
             <TouchableOpacity
-              style={styles.loadMoreBtn}
+              style={s.loadMoreBtn}
               onPress={loadOlderMessages}
               disabled={loadingMore}
               activeOpacity={0.7}
             >
               {loadingMore
                 ? <ActivityIndicator size="small" color={theme.primary} />
-                : <Text style={[styles.loadMoreText, {color: theme.primary}]}>↑ Charger les messages antérieurs</Text>
+                : <Text style={[s.loadMoreText, {color: theme.primary}]}>Charger les messages antérieurs</Text>
               }
             </TouchableOpacity>
           ) : null
         }
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>Aucun message</Text>
-            <Text style={styles.emptySubtext}>Commencez la conversation !</Text>
+          <View style={s.emptyContainer}>
+            <Text style={s.emptyText}>Aucun message</Text>
+            <Text style={s.emptySubtext}>Commencez la conversation !</Text>
           </View>
         }
       />
 
       {replyingTo && (
-        <View style={[styles.replyPreviewBar, {borderLeftColor: theme.primary, backgroundColor: theme.background}]}>
-          <View style={styles.replyPreviewContent}>
-            <Text style={[styles.replyPreviewLabel, {color: theme.primary}]}>↩️  Réponse à</Text>
-            <Text style={styles.replyPreviewText} numberOfLines={1}>
-              {replyingTo.message ?? '📷 Photo'}
+        <View style={[s.replyPreviewBar, {borderLeftColor: theme.primary, backgroundColor: theme.background}]}>
+          <View style={s.replyPreviewContent}>
+            <Text style={[s.replyPreviewLabel, {color: theme.primary}]}>Réponse à </Text>
+            <Text style={s.replyPreviewText} numberOfLines={1}>
+              {replyingTo.message ?? '[Photo]'}
             </Text>
           </View>
-          <TouchableOpacity onPress={() => setReplyingTo(null)} style={styles.replyPreviewClose}>
-            <Text style={styles.replyPreviewCloseText}>✕</Text>
+          <TouchableOpacity onPress={() => setReplyingTo(null)} style={s.replyPreviewClose}>
+            <MaterialIcons name="close" size={18} color="#888" />
           </TouchableOpacity>
         </View>
       )}
 
       {/* Bandeau erreur réseau (juste au-dessus de la saisie) */}
       {networkError && (
-        <View style={styles.networkBanner}>
-          <View style={styles.networkBannerCard}>
-            <Text style={styles.networkBannerText}>
+        <View style={s.networkBanner}>
+          <View style={s.networkBannerCard}>
+            <Text style={s.networkBannerText}>
               Impossible de récupérer les nouveaux messages, vérifiez votre connexion réseau
             </Text>
-            <TouchableOpacity onPress={() => setNetworkError(false)} style={styles.networkBannerClose}>
-              <Text style={styles.networkBannerCloseText}>✕</Text>
+            <TouchableOpacity onPress={() => setNetworkError(false)} style={s.networkBannerClose}>
+              <MaterialIcons name="close" size={18} color="#888" />
             </TouchableOpacity>
           </View>
         </View>
       )}
 
-      <View style={styles.inputContainer}>
-        <IconButton
-          icon="image-outline"
-          size={26}
-          iconColor={theme.primary}
+      <View style={[s.inputContainer, { paddingBottom: keyboardHeight > 0 ? Spacing.sm : Spacing.sm + insets.bottom }]}>
+        <TouchableOpacity
           onPress={handlePickPhoto}
           disabled={sending}
-          style={styles.photoButton}
-        />
+          style={s.photoButton}>
+          <MaterialIcons name="image" size={26} color={sending ? Neutral[300] : theme.primary} />
+        </TouchableOpacity>
         <RNTextInput
           placeholder="Votre message..."
           placeholderTextColor="#9E9E9E"
           value={newMessage}
           onChangeText={setNewMessage}
-          style={styles.input}
+          style={s.input}
           multiline
           maxLength={1000}
           editable={!sending}
           returnKeyType="send"
           blurOnSubmit={false}
         />
-        <IconButton
-          icon="send"
-          size={22}
-          iconColor={newMessage.trim() && !sending ? '#fff' : '#aaa'}
+        <TouchableOpacity
           onPress={handleSendMessage}
           disabled={!newMessage.trim() || sending}
-          style={[styles.sendButton, {backgroundColor: newMessage.trim() && !sending ? theme.primary : '#E0E0E0'}]}
-        />
+          style={[s.sendButton, {backgroundColor: newMessage.trim() && !sending ? theme.primary : Neutral[200]}]}>
+          <MaterialIcons name="send" size={20} color={newMessage.trim() && !sending ? '#FFF' : Neutral[400]} />
+        </TouchableOpacity>
       </View>
 
       {/* Lightbox plein écran pour les photos */}
@@ -678,7 +734,7 @@ const ChatScreen: React.FC = () => {
         transparent
         animationType="fade"
         onRequestClose={() => setLightboxUri(null)}>
-        <View style={styles.lightboxOverlay}>
+        <View style={s.lightboxOverlay}>
           <TouchableOpacity
             style={StyleSheet.absoluteFill}
             activeOpacity={1}
@@ -687,15 +743,15 @@ const ChatScreen: React.FC = () => {
           {lightboxUri && (
             <Image
               source={{uri: lightboxUri}}
-              style={styles.lightboxImage}
+              style={s.lightboxImage}
               resizeMode="contain"
             />
           )}
-          <TouchableOpacity style={styles.lightboxCloseBtn} onPress={() => setLightboxUri(null)}>
-            <Text style={styles.lightboxBtnText}>✕</Text>
+          <TouchableOpacity style={s.lightboxCloseBtn} onPress={() => setLightboxUri(null)}>
+            <MaterialIcons name="close" size={22} color="#FFF" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.lightboxSaveBtn} onPress={handleSaveImage}>
-            <Text style={styles.lightboxBtnText}>⬇</Text>
+          <TouchableOpacity style={s.lightboxSaveBtn} onPress={handleSaveImage}>
+            <MaterialIcons name="file-download" size={26} color="#FFF" />
           </TouchableOpacity>
         </View>
       </Modal>
@@ -707,19 +763,19 @@ const ChatScreen: React.FC = () => {
         animationType="fade"
         onRequestClose={() => setReactionPickerMsg(null)}>
         <TouchableOpacity
-          style={styles.reactionOverlay}
+          style={s.reactionOverlay}
           activeOpacity={1}
           onPress={() => setReactionPickerMsg(null)}>
-          <View style={styles.reactionPickerContainer}>
-            {REACTIONS.map(emoji => {
-              const myReaction = reactionPickerMsg?.reactions?.find(r => r.userId === currentUserId)?.emoji === emoji;
+          <View style={s.reactionPickerContainer}>
+            {REACTIONS.map(reaction => {
+              const myReaction = reactionPickerMsg?.reactions?.find(r => r.userId === currentUserId)?.emoji === reaction.key;
               return (
                 <TouchableOpacity
-                  key={emoji}
-                  style={[styles.reactionPickerBtn, myReaction ? styles.reactionPickerBtnActive : null]}
-                  onPress={() => handleReact(reactionPickerMsg!.id, emoji)}
+                  key={reaction.key}
+                  style={[s.reactionPickerBtn, myReaction ? s.reactionPickerBtnActive : null]}
+                  onPress={() => handleReact(reactionPickerMsg!.id, reaction.key)}
                 >
-                  <Text style={styles.reactionPickerText}>{emoji}</Text>
+                  <MaterialIcons name={reaction.icon as any} size={24} color={myReaction ? reaction.color : '#555'} />
                 </TouchableOpacity>
               );
             })}
@@ -733,13 +789,39 @@ const ChatScreen: React.FC = () => {
 
 const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT} = Dimensions.get('window');
 
-const styles = StyleSheet.create({
+const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: Neutral[50],
   },
   inner: {
     flex: 1,
+  },
+  header: {
+    backgroundColor: theme.primary,
+    paddingTop: 48,
+    paddingBottom: 14,
+    paddingHorizontal: Spacing.base,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: Spacing.sm,
+  },
+  headerName: {
+    ...Typography.titleSm,
+    color: '#FFF',
+  },
+  headerOnline: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.75)',
+    marginTop: 1,
   },
   loadingContainer: {
     flex: 1,
@@ -765,16 +847,24 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   messageCard: {
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
     elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 1},
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
   },
   messageCardFullWidth: {
     alignSelf: 'stretch',
   },
   myMessageCard: {
-    backgroundColor: '#DCF8C6',
+    backgroundColor: theme.background,
+    borderWidth: 1,
+    borderColor: theme.primary + '44',
   },
   otherMessageCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: Neutral[0],
   },
   photoMessageCard: {
     overflow: 'hidden',
@@ -786,7 +876,7 @@ const styles = StyleSheet.create({
   messagePhoto: {
     width: SCREEN_WIDTH * 0.6,
     height: SCREEN_WIDTH * 0.6,
-    borderRadius: 8,
+    borderRadius: Radius.sm,
     marginBottom: 4,
   },
   messageText: {
@@ -804,56 +894,61 @@ const styles = StyleSheet.create({
   },
   messageTime: {
     fontSize: 11,
-    color: '#666',
+    color: Neutral[500],
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    backgroundColor: '#fff',
+    paddingHorizontal: Spacing.sm,
+    paddingTop: Spacing.sm,
+    backgroundColor: Neutral[0],
     borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
+    borderTopColor: Neutral[100],
     elevation: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
+    shadowOffset: {width: 0, height: -2},
     shadowOpacity: 0.06,
     shadowRadius: 4,
   },
   photoButton: {
-    margin: 0,
+    width: 42,
+    height: 42,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 21,
     marginBottom: 2,
   },
   input: {
     flex: 1,
-    backgroundColor: '#F0F2F5',
+    backgroundColor: Neutral[100],
     borderRadius: 22,
     paddingHorizontal: 16,
     paddingTop: 10,
     paddingBottom: 10,
     fontSize: 15,
     maxHeight: 120,
-    color: '#222',
+    color: Neutral[800],
     marginHorizontal: 4,
   },
   sendButton: {
-    margin: 0,
-    marginBottom: 2,
-    marginLeft: 2,
     width: 42,
     height: 42,
     borderRadius: 21,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 2,
+    marginLeft: 2,
   },
   loadMoreBtn: {
     alignSelf: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    marginVertical: 10,
-    borderRadius: 20,
-    backgroundColor: '#fff',
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.xl,
+    marginVertical: Spacing.sm,
+    borderRadius: Radius.full,
+    backgroundColor: Neutral[0],
     elevation: 2,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
+    shadowOffset: {width: 0, height: 1},
     shadowOpacity: 0.1,
     shadowRadius: 3,
   },
@@ -868,14 +963,13 @@ const styles = StyleSheet.create({
     paddingTop: 50,
   },
   emptyText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#666',
-    marginBottom: 8,
+    ...Typography.titleMd,
+    color: Neutral[600],
+    marginBottom: Spacing.sm,
   },
   emptySubtext: {
-    fontSize: 14,
-    color: '#999',
+    ...Typography.body,
+    color: Neutral[500],
   },
   lightboxOverlay: {
     flex: 1,
@@ -910,11 +1004,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   lightboxBtnText: {
-    color: '#fff',
+    color: '#FFF',
     fontSize: 18,
     fontWeight: 'bold',
   },
-
   reactionsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -929,18 +1022,18 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
   },
   reactionBadge: {
-    backgroundColor: '#f0f0f0',
+    backgroundColor: Neutral[100],
     borderRadius: 12,
     paddingHorizontal: 7,
     paddingVertical: 3,
     marginRight: 4,
     marginTop: 2,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: Neutral[200],
   },
   myReactionBadge: {
-    backgroundColor: '#e3f2fd',
-    borderColor: '#2196F3',
+    backgroundColor: theme.background,
+    borderColor: theme.primary,
   },
   reactionText: {
     fontSize: 14,
@@ -953,7 +1046,7 @@ const styles = StyleSheet.create({
   },
   reactionPickerContainer: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
+    backgroundColor: Neutral[0],
     borderRadius: 36,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -969,9 +1062,9 @@ const styles = StyleSheet.create({
     marginHorizontal: 2,
   },
   reactionPickerBtnActive: {
-    backgroundColor: '#e3f2fd',
+    backgroundColor: theme.background,
     borderWidth: 2,
-    borderColor: '#2196F3',
+    borderColor: theme.primary,
   },
   reactionPickerText: {
     fontSize: 32,
@@ -981,8 +1074,8 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
   },
   networkBannerCard: {
-    backgroundColor: '#323232',
-    borderRadius: 12,
+    backgroundColor: Neutral[800],
+    borderRadius: Radius.md,
     paddingHorizontal: 14,
     paddingVertical: 10,
     flexDirection: 'row',
@@ -994,7 +1087,7 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   networkBannerText: {
-    color: '#fff',
+    color: Neutral[0],
     fontSize: 13,
     lineHeight: 18,
     flex: 1,
@@ -1004,7 +1097,7 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   networkBannerCloseText: {
-    color: '#fff',
+    color: Neutral[0],
     fontSize: 16,
     fontWeight: 'bold',
   },
@@ -1012,7 +1105,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderTopWidth: 1,
-    borderTopColor: '#e8e8e8',
+    borderTopColor: Neutral[100],
     borderLeftWidth: 3,
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -1028,20 +1121,20 @@ const styles = StyleSheet.create({
   },
   replyPreviewText: {
     fontSize: 13,
-    color: '#555',
+    color: Neutral[600],
   },
   replyPreviewClose: {
     padding: 4,
   },
   replyPreviewCloseText: {
     fontSize: 16,
-    color: '#888',
+    color: Neutral[500],
     fontWeight: '600',
   },
   replyQuoteBubble: {
     flexDirection: 'row',
     backgroundColor: 'rgba(0,0,0,0.06)',
-    borderRadius: 6,
+    borderRadius: Radius.sm,
     marginBottom: 6,
     overflow: 'hidden',
   },
@@ -1060,7 +1153,7 @@ const styles = StyleSheet.create({
   },
   replyQuoteText: {
     fontSize: 12,
-    color: '#555',
+    color: Neutral[600],
   },
 });
 

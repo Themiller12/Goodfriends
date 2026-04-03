@@ -1,0 +1,17 @@
+async sendMessage(
+    groupId: string,
+    text: string,
+    senderId: string,
+    senderName: string,
+  ): Promise<GroupMessage> {
+    const now = new Date().toISOString();
+    let msg: GroupMessage = {
+      id: `m-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      senderId,
+      senderName,
+      text: text.trim(),
+      createdAt: now,
+    };
+
+    try {
+      const 

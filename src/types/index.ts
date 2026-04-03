@@ -31,6 +31,17 @@ export interface Relationship {
   customRelationLabel?: string;  // Label libre (affiché à la place du type quand renseigné)
 }
 
+// Membre de la famille sans compte Goodfriends (frère, sœur, parent...)
+export interface FamilyMemberInfo {
+  id: string;
+  firstName: string;
+  lastName?: string;
+  dateOfBirth?: string; // ISO string
+  gender?: 'male' | 'female' | 'other';
+  relationType: RelationType; // Relation vis-à-vis du contact (ex: SIBLING)
+  notes?: string;
+}
+
 // Enfant (sans être un contact complet)
 export interface Child {
   id: string;
@@ -38,6 +49,7 @@ export interface Child {
   dateOfBirth?: Date;
   gender?: 'male' | 'female' | 'other';
   notes?: string;
+  gifts?: string[]; // Liste des cadeaux offerts
 }
 
 // Profession ou étude
@@ -46,6 +58,14 @@ export interface ProfessionStudy {
   title: string; // Nom de la profession ou de l'étude
   year?: number; // Année de début ou obtention
   notes?: string;
+}
+
+// Note libre sur un contact (une par entrée, stocké localement)
+export interface NoteEntry {
+  id: string;
+  text: string;
+  createdAt: string; // ISO date string
+  updatedAt: string; // ISO date string
 }
 
 // Contact
@@ -68,8 +88,10 @@ export interface Contact {
   professionsStudies: ProfessionStudy[];
   groupIds: string[];
   goodfriendsUserId?: string;
+  familyMembers?: FamilyMemberInfo[]; // membres famille sans compte Goodfriends
   createdAt: Date;
   updatedAt: Date;
+  lastContactedAt?: Date; // Date du dernier vrai contact (appel, message GF, action manuelle)
 }
 
 // Groupe de contacts
@@ -127,4 +149,44 @@ export interface GraphLink {
   source: string; // Contact ID
   target: string; // Contact ID
   relationType: RelationType;
+}
+
+// Réaction sur un message de groupe
+export interface GroupMessageReaction {
+  userId: string;
+  emoji: string; // clé de réaction : 'love'|'like'|'dislike'|'wow'|'angry'
+}
+
+// Message local dans un groupe de conversation
+export interface GroupMessage {
+  id: string;
+  senderId: string; // 'me' ou goodfriendsUserId d'un membre
+  senderName: string;
+  text: string;
+  imageBase64?: string; // image en base64
+  imageMime?: string;   // ex: 'image/jpeg'
+  replyToId?: string;
+  replyToText?: string;
+  replyToSenderName?: string;
+  reactions?: GroupMessageReaction[];
+  createdAt: string; // ISO date string
+}
+
+// Membre d'un groupe de conversation
+export interface GroupMember {
+  userId: string; // goodfriendsUserId (peut être vide si contact local seulement)
+  contactId: string; // id du Contact local
+  firstName: string;
+  lastName: string;
+  photo?: string;
+}
+
+// Groupe de conversation (stocké localement)
+export interface GroupChat {
+  id: string;
+  name: string;
+  members: GroupMember[];
+  messages: GroupMessage[];
+  createdAt: string; // ISO date string
+  updatedAt: string; // ISO date string
 }

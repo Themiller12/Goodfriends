@@ -6,7 +6,9 @@ import {
   TouchableOpacity,
   ScrollView,
 } from 'react-native';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
+import {Neutral, Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
 
 interface SettingsScreenProps {
   navigation: any;
@@ -14,172 +16,190 @@ interface SettingsScreenProps {
 
 const SettingsScreen: React.FC<SettingsScreenProps> = ({navigation}) => {
   const {theme} = useTheme();
+
   const menuItems = [
     {
       id: 'profile',
       title: 'Mon profil',
-      icon: '👤',
-      subtitle: 'Gérer mes informations personnelles',
+      subtitle: 'Informations personnelles',
+      icon: 'person',
+      color: '#1565C0',
+      bg: '#E3F2FD',
       onPress: () => navigation.navigate('Profile'),
     },
     {
       id: 'friends',
       title: 'Mes amis GoodFriends',
-      icon: '👥',
-      subtitle: 'Gérer mes connexions et demandes',
+      subtitle: 'Connexions et demandes',
+      icon: 'group',
+      color: '#2E7D32',
+      bg: '#E8F5E9',
       onPress: () => navigation.navigate('MyFriends'),
     },
     {
       id: 'groups',
       title: 'Mes groupes',
-      icon: '📁',
-      subtitle: 'Organiser mes contacts en groupes',
+      subtitle: 'Organiser mes contacts',
+      icon: 'folder',
+      color: '#E65100',
+      bg: '#FFF3E0',
       onPress: () => navigation.navigate('MyGroups'),
     },
     {
       id: 'theme',
       title: 'Affichage',
-      icon: '🎨',
-      subtitle: 'Personnaliser le thème et la vue par défaut',
+      subtitle: 'Thème et vue par défaut',
+      icon: 'palette',
+      color: '#6A1B9A',
+      bg: '#F3E5F5',
       onPress: () => navigation.navigate('ThemeSettings'),
     },
     {
       id: 'notifications',
       title: 'Notifications',
-      icon: '🔔',
-      subtitle: 'Gérer les alertes et rappels',
+      subtitle: 'Alertes et rappels',
+      icon: 'notifications',
+      color: '#F57C00',
+      bg: '#FFF8E1',
       onPress: () => navigation.navigate('NotificationSettings'),
     },
     {
       id: 'privacy',
       title: 'Confidentialité',
-      icon: '🔒',
       subtitle: 'Paramètres de confidentialité',
+      icon: 'lock',
+      color: '#C62828',
+      bg: '#FFEBEE',
       onPress: () => navigation.navigate('PrivacySettings'),
     },
   ];
 
+  const S = createStyles(theme);
+
   return (
-    <ScrollView style={styles(theme).container}>
-      <View style={styles(theme).header}>
-        <View style={styles(theme).headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-            <Text style={styles(theme).backButtonText}>←</Text>
+    <ScrollView style={S.container} showsVerticalScrollIndicator={false}>
+      {/* En-tête */}
+      <View style={S.header}>
+        <View style={S.headerRow}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={S.backBtn}>
+            <MaterialIcons name="arrow-back" size={22} color="#FFF" />
           </TouchableOpacity>
-          <Text style={styles(theme).headerTitle}>Paramètres</Text>
+          <Text style={S.headerTitle}>Paramètres</Text>
         </View>
-        <Text style={styles(theme).headerSubtitle}>
-          Personnalisez votre expérience GoodFriends
-        </Text>
+        <Text style={S.headerSubtitle}>Personnalisez votre expérience</Text>
       </View>
 
-      <View style={styles(theme).menuContainer}>
-        {menuItems.map((item) => (
+      {/* Menu */}
+      <View style={S.menuCard}>
+        {menuItems.map((item, index) => (
           <TouchableOpacity
             key={item.id}
-            style={styles(theme).menuItem}
-            onPress={item.onPress}>
-            <View style={styles(theme).iconContainer}>
-              <Text style={styles(theme).icon}>{item.icon}</Text>
+            style={[
+              S.menuRow,
+              index === menuItems.length - 1 && S.menuRowLast,
+            ]}
+            onPress={item.onPress}
+            activeOpacity={0.7}>
+            <View style={[S.iconBox, {backgroundColor: item.bg}]}>
+              <MaterialIcons name={item.icon as any} size={22} color={item.color} />
             </View>
-            <View style={styles(theme).textContainer}>
-              <Text style={styles(theme).menuTitle}>{item.title}</Text>
-              <Text style={styles(theme).menuSubtitle}>{item.subtitle}</Text>
+            <View style={S.menuText}>
+              <Text style={S.menuTitle}>{item.title}</Text>
+              <Text style={S.menuSubtitle}>{item.subtitle}</Text>
             </View>
-            <Text style={styles(theme).chevron}>›</Text>
+            <MaterialIcons name="chevron-right" size={22} color={Neutral[300]} />
           </TouchableOpacity>
         ))}
       </View>
-      <Text style={styles(theme).versionText}>Version 1.3</Text>
+
+      <Text style={S.versionText}>GoodFriends — Version 1.5</Text>
     </ScrollView>
   );
 };
 
-const styles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  versionText: {
-    textAlign: 'center',
-    color: '#aaa',
-    fontSize: 13,
-    marginTop: 24,
-    marginBottom: 32,
+    backgroundColor: Neutral[50],
   },
   header: {
     backgroundColor: theme.primary,
-    padding: 20,
-    paddingTop: 40,
-    paddingBottom: 30,
+    paddingTop: 48,
+    paddingBottom: 28,
+    paddingHorizontal: Spacing.xl,
+    borderBottomLeftRadius: Radius.xxl,
+    borderBottomRightRadius: Radius.xxl,
+    ...Shadow.md,
+    overflow: 'visible',
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 5,
+    marginBottom: 6,
   },
-  backButton: {
-    marginRight: 15,
-    padding: 5,
-  },
-  backButtonText: {
-    fontSize: 28,
-    color: '#fff',
-    fontWeight: 'bold',
-  },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 5,
-  },
-  headerSubtitle: {
-    fontSize: 14,
-    color: '#E3F2FD',
-  },
-  menuContainer: {
-    marginTop: 10,
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    marginHorizontal: 15,
-    overflow: 'hidden',
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  iconContainer: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#E3F2FD',
+  backBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.22)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 15,
+    marginRight: Spacing.md,
   },
-  icon: {
-    fontSize: 24,
+  headerTitle: {
+    ...Typography.title,
+    color: '#FFF',
+    flex: 1,
   },
-  textContainer: {
+  headerSubtitle: {
+    ...Typography.bodyMd,
+    color: 'rgba(255,255,255,0.80)',
+  },
+  menuCard: {
+    backgroundColor: Neutral[0],
+    borderRadius: Radius.lg,
+    marginTop: Spacing.xl,
+    marginHorizontal: Spacing.base,
+    overflow: 'hidden',
+    ...Shadow.sm,
+  },
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: Spacing.base,
+    borderBottomWidth: 1,
+    borderBottomColor: Neutral[100],
+  },
+  menuRowLast: {
+    borderBottomWidth: 0,
+  },
+  iconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.md,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: Spacing.md,
+  },
+  menuText: {
     flex: 1,
   },
   menuTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 3,
+    ...Typography.titleSm,
+    color: Neutral[800],
+    marginBottom: 2,
   },
   menuSubtitle: {
-    fontSize: 13,
-    color: '#666',
+    ...Typography.bodySm,
+    color: Neutral[500],
   },
-  chevron: {
-    fontSize: 24,
-    color: '#ccc',
-    marginLeft: 10,
+  versionText: {
+    textAlign: 'center',
+    ...Typography.bodySm,
+    color: Neutral[400],
+    marginTop: Spacing.xxl,
+    marginBottom: Spacing.xxxl,
   },
 });
 

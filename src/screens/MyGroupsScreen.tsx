@@ -12,6 +12,7 @@ import {
   Image,
 } from 'react-native';
 import {Picker} from '@react-native-picker/picker';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
 import {ContactGroup, GroupType, Contact} from '../types';
 import StorageService from '../services/StorageService';
@@ -195,13 +196,15 @@ const MyGroupsScreen: React.FC<MyGroupsScreenProps> = ({navigation}) => {
       <View style={styles(theme).header}>
         <View style={styles(theme).headerRow}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-            <Text style={styles(theme).backButtonText}>←</Text>
+            <View style={styles(theme).backBtnCircle}>
+              <MaterialIcons name="arrow-back" size={22} color="#383830" />
+            </View>
           </TouchableOpacity>
-          <Text style={styles(theme).headerTitle}>Mes groupes</Text>
+          <View>
+            <Text style={styles(theme).headerTitle}>Mes groupes</Text>
+            <Text style={styles(theme).headerSubtitle}>Organisez vos contacts en groupes</Text>
+          </View>
         </View>
-        <Text style={styles(theme).headerSubtitle}>
-          Organisez vos contacts en groupes
-        </Text>
       </View>
 
       <FlatList
@@ -353,37 +356,39 @@ const MyGroupsScreen: React.FC<MyGroupsScreenProps> = ({navigation}) => {
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fcf9f0',
   },
   header: {
-    backgroundColor: theme.primary,
-    padding: 20,
-    paddingTop: 40,
-    paddingBottom: 30,
+    backgroundColor: '#fcf9f0',
+    paddingHorizontal: 20,
+    paddingTop: 48,
+    paddingBottom: 16,
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 5,
+    gap: 12,
   },
   backButton: {
-    marginRight: 15,
-    padding: 5,
+    padding: 0,
   },
-  backButtonText: {
-    fontSize: 28,
-    color: '#fff',
-    fontWeight: 'bold',
+  backBtnCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#383830',
   },
   headerSubtitle: {
-    fontSize: 14,
-    color: '#E3F2FD',
-    marginTop: 5,
+    fontSize: 13,
+    color: '#65655c',
+    marginTop: 2,
   },
   listContent: {
     padding: 15,

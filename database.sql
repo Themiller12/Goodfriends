@@ -25,6 +25,7 @@ CREATE TABLE users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     last_login TIMESTAMP NULL,
+    last_seen TIMESTAMP NULL,
     INDEX idx_email (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -82,6 +83,23 @@ CREATE TABLE contact_groups (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Table des enfants (non-contacts)
+DROP TABLE IF EXISTS family_members;
+CREATE TABLE family_members (
+    id VARCHAR(50) PRIMARY KEY,
+    contact_id VARCHAR(50) NOT NULL,
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100),
+    date_of_birth DATE,
+    gender ENUM('male', 'female', 'other'),
+    relation_type ENUM('spouse', 'child', 'parent', 'father', 'mother', 'sibling', 'cousin', 'stepmother', 'stepfather') NOT NULL,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    INDEX idx_contact_id (contact_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Table des enfants (non-contacts)
 CREATE TABLE children (
     id VARCHAR(50) PRIMARY KEY,
     contact_id VARCHAR(50) NOT NULL,
@@ -90,6 +108,7 @@ CREATE TABLE children (
     date_of_birth DATE,
     gender ENUM('male', 'female', 'other'),
     notes TEXT,
+    gifts TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
@@ -122,6 +141,11 @@ CREATE TABLE user_profiles (
     date_of_birth DATE,
     bio TEXT,
     photo TEXT,
+    -- Paramètres de confidentialité
+    privacy_profile_public      TINYINT(1) NOT NULL DEFAULT 1,
+    privacy_show_online         TINYINT(1) NOT NULL DEFAULT 1,
+    privacy_allow_search_email  TINYINT(1) NOT NULL DEFAULT 1,
+    privacy_allow_search_phone  TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -143,6 +167,45 @@ CREATE TABLE friend_requests (
     INDEX idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Table des groupes de conversation (messagerie)
+CREATE TABLE group_chats (
+    id VARCHAR(50) PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    created_by VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_created_by (created_by)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Membres des groupes de conversation
+CREATE TABLE group_chat_members (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    group_id VARCHAR(50) NOT NULL,
+    user_id VARCHAR(50) NOT NULL,
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100),
+    photo LONGTEXT,
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (group_id) REFERENCES group_chats(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_member (group_id, user_id),
+    INDEX idx_group_id (group_id),
+    INDEX idx_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Messages des groupes de conversation
+CREATE TABLE group_chat_messages (
+    id VARCHAR(100) PRIMARY KEY,
+    group_id VARCHAR(50) NOT NULL,
+    sender_id VARCHAR(50) NOT NULL,
+    sender_name VARCHAR(200) NOT NULL,
+    message TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (group_id) REFERENCES group_chats(id) ON DELETE CASCADE,
+    INDEX idx_group_created (group_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Données de test (optionnel)
 -- Décommentez pour créer un compte de test
 
@@ -156,3 +219,14 @@ VALUES
     ('group_2', 'test_user_1', 'Amis', 'friends'),
     ('group_3', 'test_user_1', 'Travail', 'work');
 */
+
+-- ─── Migration : ajout des colonnes de confidentialité à user_profiles ────────
+-- À exécuter sur une base existante (ne pas relancer si DROP TABLE ci-dessus)
+-- ALTER TABLE user_profiles
+--   ADD COLUMN privacy_profile_public      TINYINT(1) NOT NULL DEFAULT 1 AFTER photo,
+--   ADD COLUMN privacy_show_online         TINYINT(1) NOT NULL DEFAULT 1 AFTER privacy_profile_public,
+--   ADD COLUMN privacy_allow_search_email  TINYINT(1) NOT NULL DEFAULT 1 AFTER privacy_show_online,
+--   ADD COLUMN privacy_allow_search_phone  TINYINT(1) NOT NULL DEFAULT 1 AFTER privacy_allow_search_email;
+
+-- ─── Migration : ajout du statut en ligne dans users ──────────────────────────
+le statut en ligne (dans les options de confide,tialité) est affiché où si activé ?

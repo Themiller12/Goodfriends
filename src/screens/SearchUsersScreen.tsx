@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useState, useMemo} from 'react';
 import {
   View,
   Text,
@@ -8,8 +8,12 @@ import {
   FlatList,
   Alert,
   Image,
+  StatusBar,
   ActivityIndicator,
 } from 'react-native';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import {useTheme} from '../context/ThemeContext';
+import {Neutral, Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
 import FriendRequestService, {GoodFriendsUser} from '../services/FriendRequestService';
 
 interface SearchUsersScreenProps {
@@ -17,6 +21,8 @@ interface SearchUsersScreenProps {
 }
 
 const SearchUsersScreen: React.FC<SearchUsersScreenProps> = ({navigation}) => {
+  const {theme} = useTheme();
+  const S = useMemo(() => styles(theme), [theme]);
   const [searchQuery, setSearchQuery] = useState('');
   const [users, setUsers] = useState<GoodFriendsUser[]>([]);
   const [loading, setLoading] = useState(false);
@@ -66,45 +72,45 @@ const SearchUsersScreen: React.FC<SearchUsersScreenProps> = ({navigation}) => {
   const getStatusButton = (user: GoodFriendsUser) => {
     if (user.requestStatus === 'pending') {
       return (
-        <View style={styles.statusContainer}>
-          <Text style={styles.statusText}>En attente</Text>
+        <View style={S.statusContainer}>
+          <Text style={S.statusText}>En attente</Text>
         </View>
       );
     } else if (user.requestStatus === 'accepted') {
       return (
-        <View style={styles.statusContainer}>
-          <Text style={styles.statusTextAccepted}>Déjà ami</Text>
+        <View style={S.statusContainer}>
+          <Text style={S.statusTextAccepted}>Déjà ami</Text>
         </View>
       );
     } else {
       return (
         <TouchableOpacity
-          style={styles.addButton}
+          style={S.addButton}
           onPress={() => handleSendRequest(user.id, `${user.firstName} ${user.lastName}`)}>
-          <Text style={styles.addButtonText}>+ Ajouter</Text>
+          <Text style={S.addButtonText}>+ Ajouter</Text>
         </TouchableOpacity>
       );
     }
   };
 
   const renderUser = ({item}: {item: GoodFriendsUser}) => (
-    <View style={styles.userItem}>
-      <View style={styles.userInfo}>
+    <View style={S.userItem}>
+      <View style={S.userInfo}>
         {item.photo ? (
-          <Image source={{uri: item.photo}} style={styles.avatar} />
+          <Image source={{uri: item.photo}} style={S.avatar} />
         ) : (
-          <View style={[styles.avatar, styles.avatarPlaceholder]}>
-            <Text style={styles.avatarText}>
+          <View style={[S.avatar, S.avatarPlaceholder]}>
+            <Text style={S.avatarText}>
               {item.firstName?.charAt(0)}{item.lastName?.charAt(0)}
             </Text>
           </View>
         )}
-        <View style={styles.userDetails}>
-          <Text style={styles.userName}>
+        <View style={S.userDetails}>
+          <Text style={S.userName}>
             {item.firstName} {item.lastName}
           </Text>
-          <Text style={styles.userEmail}>{item.email}</Text>
-          {item.phone && <Text style={styles.userPhone}>{item.phone}</Text>}
+          <Text style={S.userEmail}>{item.email}</Text>
+          {item.phone && <Text style={S.userPhone}>{item.phone}</Text>}
         </View>
       </View>
       {getStatusButton(item)}
@@ -112,39 +118,49 @@ const SearchUsersScreen: React.FC<SearchUsersScreenProps> = ({navigation}) => {
   );
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Rechercher des utilisateurs</Text>
-        <Text style={styles.subtitle}>
-          Recherchez vos amis par email ou numéro de téléphone
-        </Text>
+    <View style={S.root}>
+      <StatusBar barStyle="light-content" backgroundColor={theme.primary} />
+      {/* ── Header ── */}
+      <View style={S.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={S.backButton}>
+          <MaterialIcons name="arrow-back" size={22} color="#FFF" />
+        </TouchableOpacity>
+        <View style={S.headerContent}>
+          <Text style={S.title}>Rechercher des amis</Text>
+          <Text style={S.subtitle}>Par email ou numéro de téléphone</Text>
+        </View>
       </View>
 
-      <View style={styles.searchContainer}>
+      {/* ── Barre de recherche ── */}
+      <View style={S.searchBar}>
+        <MaterialIcons name="search" size={20} color={Neutral[400]} style={{marginRight: 8}} />
         <TextInput
-          style={styles.searchInput}
+          style={S.searchInput}
           placeholder="Email ou téléphone..."
           value={searchQuery}
           onChangeText={setSearchQuery}
+          placeholderTextColor={Neutral[400]}
           autoCapitalize="none"
           keyboardType="email-address"
+          onSubmitEditing={handleSearch}
+          returnKeyType="search"
         />
         <TouchableOpacity
-          style={styles.searchButton}
+          style={S.searchButton}
           onPress={handleSearch}
           disabled={loading}>
           {loading ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color="#fff" size="small" />
           ) : (
-            <Text style={styles.searchButtonText}>🔍 Rechercher</Text>
+            <MaterialIcons name="arrow-forward" size={20} color="#FFF" />
           )}
         </TouchableOpacity>
       </View>
 
       {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#2196F3" />
-          <Text style={styles.loadingText}>Recherche en cours...</Text>
+        <View style={S.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.primary} />
+          <Text style={S.loadingText}>Recherche en cours...</Text>
         </View>
       ) : searched ? (
         users.length > 0 ? (
@@ -152,22 +168,22 @@ const SearchUsersScreen: React.FC<SearchUsersScreenProps> = ({navigation}) => {
             data={users}
             keyExtractor={(item) => item.id}
             renderItem={renderUser}
-            contentContainerStyle={styles.listContainer}
+            contentContainerStyle={S.listContainer}
           />
         ) : (
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>😔</Text>
-            <Text style={styles.emptyTitle}>Aucun résultat</Text>
-            <Text style={styles.emptySubtitle}>
+          <View style={S.emptyContainer}>
+            <MaterialIcons name="person-search" size={56} color={Neutral[300]} />
+            <Text style={S.emptyTitle}>Aucun résultat</Text>
+            <Text style={S.emptySubtitle}>
               Essayez avec un autre email ou numéro de téléphone
             </Text>
           </View>
         )
       ) : (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>🔍</Text>
-          <Text style={styles.emptyTitle}>Recherchez des amis</Text>
-          <Text style={styles.emptySubtitle}>
+        <View style={S.emptyContainer}>
+          <MaterialIcons name="group-add" size={56} color={Neutral[300]} />
+          <Text style={S.emptyTitle}>Trouvez vos amis</Text>
+          <Text style={S.emptySubtitle}>
             Entrez un email ou un numéro de téléphone pour commencer
           </Text>
         </View>
@@ -176,77 +192,95 @@ const SearchUsersScreen: React.FC<SearchUsersScreenProps> = ({navigation}) => {
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
+const styles = (theme: any) => StyleSheet.create({
+  root: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: Neutral[50],
   },
+  // ── Header ──
   header: {
-    backgroundColor: '#fff',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    backgroundColor: theme.primary,
+    paddingTop: 52,
+    paddingBottom: 20,
+    paddingHorizontal: Spacing.xl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomLeftRadius: Radius.xxl,
+    borderBottomRightRadius: Radius.xxl,
+    ...Shadow.md,
+  },
+  backButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: Spacing.md,
+  },
+  headerContent: {
+    flex: 1,
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 5,
+    ...Typography.title,
+    color: '#FFF',
   },
   subtitle: {
-    fontSize: 14,
-    color: '#666',
+    ...Typography.bodyMd,
+    color: 'rgba(255,255,255,0.75)',
+    marginTop: 2,
   },
-  searchContainer: {
-    backgroundColor: '#fff',
-    padding: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+  // ── Search bar ──
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Neutral[0],
+    margin: Spacing.base,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.base,
+    paddingVertical: Spacing.sm,
+    ...Shadow.sm,
   },
   searchInput: {
-    backgroundColor: '#f5f5f5',
-    padding: 15,
-    borderRadius: 10,
-    fontSize: 16,
-    marginBottom: 10,
+    flex: 1,
+    ...Typography.body,
+    color: Neutral[800],
+    paddingVertical: 0,
+    marginLeft: Spacing.sm,
   },
   searchButton: {
-    backgroundColor: '#2196F3',
-    padding: 15,
-    borderRadius: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: theme.primary,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  searchButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
+  // ── States ──
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
   loadingText: {
-    marginTop: 10,
-    fontSize: 16,
-    color: '#666',
+    marginTop: Spacing.sm,
+    ...Typography.body,
+    color: Neutral[500],
   },
   listContainer: {
-    padding: 15,
+    padding: Spacing.base,
+    paddingBottom: 40,
   },
+  // ── User item ──
   userItem: {
-    backgroundColor: '#fff',
-    padding: 15,
-    borderRadius: 10,
-    marginBottom: 10,
+    backgroundColor: Neutral[0],
+    padding: Spacing.base,
+    borderRadius: Radius.lg,
+    marginBottom: Spacing.sm,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    ...Shadow.sm,
   },
   userInfo: {
     flexDirection: 'row',
@@ -257,61 +291,59 @@ const styles = StyleSheet.create({
     width: 50,
     height: 50,
     borderRadius: 25,
-    marginRight: 15,
+    marginRight: Spacing.md,
   },
   avatarPlaceholder: {
-    backgroundColor: '#2196F3',
+    backgroundColor: theme.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   avatarText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
+    color: '#FFF',
+    ...Typography.titleSm,
   },
   userDetails: {
     flex: 1,
   },
   userName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 3,
+    ...Typography.titleSm,
+    color: Neutral[800],
+    marginBottom: 2,
   },
   userEmail: {
-    fontSize: 14,
-    color: '#666',
+    ...Typography.bodyMd,
+    color: Neutral[500],
   },
   userPhone: {
-    fontSize: 13,
-    color: '#999',
+    ...Typography.bodyMd,
+    color: Neutral[400],
     marginTop: 2,
   },
   addButton: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
+    backgroundColor: theme.primary,
+    paddingHorizontal: Spacing.base,
+    paddingVertical: 8,
+    borderRadius: Radius.md,
   },
   addButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 'bold',
+    color: '#FFF',
+    ...Typography.label,
+    fontWeight: '700',
   },
   statusContainer: {
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: '#FFF3E0',
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 8,
+    borderRadius: Radius.md,
+    backgroundColor: Neutral[100],
   },
   statusText: {
     color: '#F57C00',
-    fontSize: 14,
+    ...Typography.label,
     fontWeight: '600',
   },
   statusTextAccepted: {
     color: '#4CAF50',
-    fontSize: 14,
+    ...Typography.label,
     fontWeight: '600',
   },
   emptyContainer: {
@@ -320,19 +352,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 40,
   },
-  emptyText: {
-    fontSize: 64,
-    marginBottom: 20,
-  },
   emptyTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 10,
+    ...Typography.titleMd,
+    color: Neutral[700],
+    marginTop: Spacing.base,
+    marginBottom: Spacing.sm,
   },
   emptySubtitle: {
-    fontSize: 14,
-    color: '#666',
+    ...Typography.body,
+    color: Neutral[500],
     textAlign: 'center',
   },
 });

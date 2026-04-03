@@ -356,6 +356,8 @@ class NotificationService {
       soundName: 'default',
       importance: 'high',
       vibrate: true,
+      vibration: 300,
+      priority: 'high',
     });
 
     Alert.alert(
@@ -415,6 +417,7 @@ class NotificationService {
       soundName: 'default',
       importance: 'high',
       vibrate: true,
+      vibration: 300,
       priority: 'high',
       userInfo: {
         type: 'message',
@@ -448,6 +451,7 @@ class NotificationService {
       soundName: 'default',
       importance: 'high',
       vibrate: true,
+      vibration: 300,
       priority: 'high',
       userInfo: {
         type: 'friend_request',

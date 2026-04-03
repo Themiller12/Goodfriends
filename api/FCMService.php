@@ -97,7 +97,17 @@ class FCMService {
         // FCM v1 exige que toutes les valeurs de data soient des chaînes
         $stringData = array_map('strval', $data);
 
-        $androidNotification = ['sound' => 'default'];
+        // Déterminer le bon canal Android depuis les données (pour le son/vibration)
+        $channelId = isset($data['type']) ? ($data['type'] === 'friend_request' ? 'friend-requests-channel' : 'messages-channel') : 'messages-channel';
+
+        $androidNotification = [
+            'sound'                  => 'default',
+            'channel_id'             => $channelId,
+            'default_sound'          => true,
+            'default_vibrate_timings' => true,
+            'notification_priority'  => 'PRIORITY_HIGH',
+            'visibility'             => 'PUBLIC',
+        ];
         if ($tag !== null) {
             // Même tag = remplace la notification existante sur l'appareil
             $androidNotification['tag'] = $tag;
@@ -232,5 +242,29 @@ class FCMService {
         ];
 
         return $this->sendNotification($token, $title, $body, $data, 'msg_' . $conversationId);
+    }
+
+    /**
+     * Envoyer une notification de demande d'ami
+     */
+    public function sendFriendRequestNotification($db, $recipientUserId, $senderId, $senderName, $senderEmail) {
+        $token = $this->getUserToken($db, $recipientUserId);
+
+        if (!$token) {
+            error_log("[FCMService] Aucun token FCM pour l'utilisateur: $recipientUserId");
+            return false;
+        }
+
+        $title = "👋 Nouvelle demande d'ami";
+        $body  = "$senderName souhaite vous ajouter en ami";
+
+        $data = [
+            'type'        => 'friend_request',
+            'senderId'    => (string) $senderId,
+            'senderName'  => $senderName,
+            'senderEmail' => $senderEmail,
+        ];
+
+        return $this->sendNotification($token, $title, $body, $data, 'fr_' . $senderId);
     }
 }

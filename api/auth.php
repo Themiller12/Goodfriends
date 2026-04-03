@@ -8,14 +8,87 @@ $method = $_SERVER['REQUEST_METHOD'];
 $rawData = file_get_contents('php://input');
 $data = json_decode($rawData, true);
 
-// DEBUG: Décommenter pour voir ce qui est reçu
-// error_log("Method: $method");
-// error_log("Action: " . (isset($_GET['action']) ? $_GET['action'] : 'NON DEFINI'));
-// error_log("Data: " . print_r($data, true));
-
 // Vérifier si les données JSON sont valides
 if ($rawData && json_last_error() !== JSON_ERROR_NONE) {
     sendResponse(false, 'JSON invalide: ' . json_last_error_msg(), null, 400);
+}
+
+// ─── Fonctions d'envoi d'email ────────────────────────────────────────────────
+
+function sendVerificationEmail($email, $firstName, $code) {
+    $subject = 'Votre code de vérification GoodFriends';
+    $htmlBody = '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f8f4ea;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0">
+  <tr><td align="center" style="padding:40px 20px;">
+    <table width="540" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+      <tr><td style="background:#9c6b3c;padding:32px 40px;text-align:center;">
+        <h1 style="margin:0;color:#ffffff;font-size:26px;letter-spacing:1px;">GoodFriends</h1>
+        <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">Gardons le contact</p>
+      </td></tr>
+      <tr><td style="padding:40px;">
+        <h2 style="color:#383830;font-size:20px;margin:0 0 12px;">Bonjour ' . htmlspecialchars($firstName) . ' 👋</h2>
+        <p style="color:#65655c;font-size:15px;line-height:1.6;margin:0 0 28px;">
+          Merci de vous inscrire sur <strong>GoodFriends</strong> ! Entrez le code ci-dessous pour activer votre compte.
+        </p>
+        <div style="background:#f8f4ea;border-radius:12px;padding:28px;text-align:center;margin:0 0 28px;">
+          <p style="margin:0 0 8px;color:#65655c;font-size:13px;text-transform:uppercase;letter-spacing:1px;">Code de vérification</p>
+          <p style="margin:0;font-size:42px;font-weight:bold;letter-spacing:10px;color:#9c6b3c;">' . $code . '</p>
+        </div>
+        <p style="color:#aaa;font-size:13px;margin:0;">Ce code expire dans <strong>30 minutes</strong>. Ne le partagez avec personne.</p>
+      </td></tr>
+      <tr><td style="background:#f8f4ea;padding:20px 40px;text-align:center;">
+        <p style="margin:0;color:#aaa;font-size:12px;">&copy; ' . date('Y') . ' GoodFriends</p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body></html>';
+    $headers  = "MIME-Version: 1.0\r\n";
+    $headers .= "Content-Type: text/html; charset=UTF-8\r\n";
+    $headers .= "From: GoodFriends <noreply@goodfriends.app>\r\n";
+    $headers .= "Reply-To: noreply@goodfriends.app\r\n";
+    return mail($email, $subject, $htmlBody, $headers);
+}
+
+function sendWelcomeEmail($email, $firstName) {
+    $subject = 'Bienvenue sur GoodFriends ! 🎉';
+    $htmlBody = '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f8f4ea;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0">
+  <tr><td align="center" style="padding:40px 20px;">
+    <table width="540" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+      <tr><td style="background:#9c6b3c;padding:32px 40px;text-align:center;">
+        <h1 style="margin:0;color:#ffffff;font-size:26px;letter-spacing:1px;">GoodFriends</h1>
+        <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">Gardons le contact</p>
+      </td></tr>
+      <tr><td style="padding:40px;">
+        <h2 style="color:#383830;font-size:22px;margin:0 0 12px;">🎉 Bienvenue, ' . htmlspecialchars($firstName) . ' !</h2>
+        <p style="color:#65655c;font-size:15px;line-height:1.6;margin:0 0 20px;">
+          Votre compte <strong>GoodFriends</strong> est activé. Connectez-vous et commencez à entretenir vos relations avec ceux qui comptent.
+        </p>
+        <div style="background:#f8f4ea;border-radius:12px;padding:24px;margin:0 0 28px;">
+          <p style="margin:0 0 10px;color:#383830;font-size:15px;font-weight:bold;">Avec GoodFriends vous pouvez :</p>
+          <ul style="margin:0;padding-left:20px;color:#65655c;font-size:14px;line-height:2;">
+            <li>Organiser vos contacts et ne plus oublier un anniversaire 🎂</li>
+            <li>Prendre des nouvelles de vos proches au bon moment 💛</li>
+            <li>Envoyer des messages directement depuis l\'app 💬</li>
+          </ul>
+        </div>
+        <p style="color:#aaa;font-size:13px;margin:0;">Besoin d\'aide ? <a href="mailto:support@goodfriends.app" style="color:#9c6b3c;">support@goodfriends.app</a></p>
+      </td></tr>
+      <tr><td style="background:#f8f4ea;padding:20px 40px;text-align:center;">
+        <p style="margin:0;color:#aaa;font-size:12px;">&copy; ' . date('Y') . ' GoodFriends</p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body></html>';
+    $headers  = "MIME-Version: 1.0\r\n";
+    $headers .= "Content-Type: text/html; charset=UTF-8\r\n";
+    $headers .= "From: GoodFriends <noreply@goodfriends.app>\r\n";
+    $headers .= "Reply-To: noreply@goodfriends.app\r\n";
+    return mail($email, $subject, $htmlBody, $headers);
 }
 
 // REGISTER - Créer un nouveau compte
@@ -55,10 +128,12 @@ if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'registe
     $stmt->bindParam(':verification_code', $verificationCode);
     
     if ($stmt->execute()) {
-        sendResponse(true, 'Compte créé avec succès', [
+        // Envoyer le mail de vérification réel
+        sendVerificationEmail($data['email'], $data['firstName'], $verificationCode);
+
+        sendResponse(true, 'Compte créé. Un email de vérification a été envoyé.', [
             'userId' => $userId,
-            'verificationCode' => $verificationCode,
-            'email' => $data['email']
+            'email'  => $data['email'],
         ], 201);
     } else {
         sendResponse(false, 'Erreur lors de la création du compte', null, 500);
@@ -139,9 +214,19 @@ if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'verify'
     $updateStmt = $db->prepare($updateQuery);
     $updateStmt->bindParam(':id', $user['id']);
     $updateStmt->execute();
-    
+
+    // Envoyer l'email de bienvenue
+    $profileQuery = "SELECT first_name, email FROM users WHERE id = :id";
+    $profileStmt = $db->prepare($profileQuery);
+    $profileStmt->bindParam(':id', $user['id']);
+    $profileStmt->execute();
+    $profile = $profileStmt->fetch(PDO::FETCH_ASSOC);
+    if ($profile) {
+        sendWelcomeEmail($profile['email'], $profile['first_name']);
+    }
+
     $token = createToken($user['id']);
-    
+
     sendResponse(true, 'Compte vérifié avec succès', ['token' => $token]);
 }
 
@@ -154,13 +239,22 @@ if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'resend'
     
     $newCode = str_pad(rand(0, 999999), 6, '0', STR_PAD_LEFT);
     
-    $query = "UPDATE users SET verification_code = :code WHERE email = :email";
+    $query = "UPDATE users SET verification_code = :code WHERE email = :email AND is_verified = FALSE";
     $stmt = $db->prepare($query);
     $stmt->bindParam(':code', $newCode);
     $stmt->bindParam(':email', $data['email']);
     
-    if ($stmt->execute()) {
-        sendResponse(true, 'Nouveau code envoyé', ['verificationCode' => $newCode]);
+    if ($stmt->execute() && $stmt->rowCount() > 0) {
+        // Récupérer le prénom pour l'email
+        $nameQuery = "SELECT first_name FROM users WHERE email = :email";
+        $nameStmt = $db->prepare($nameQuery);
+        $nameStmt->bindParam(':email', $data['email']);
+        $nameStmt->execute();
+        $row = $nameStmt->fetch(PDO::FETCH_ASSOC);
+        $firstName = $row ? $row['first_name'] : '';
+
+        sendVerificationEmail($data['email'], $firstName, $newCode);
+        sendResponse(true, 'Nouveau code envoyé par email');
     } else {
         sendResponse(false, 'Erreur lors de l\'envoi du code', null, 500);
     }

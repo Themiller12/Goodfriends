@@ -8,12 +8,10 @@ import {
   TextInput,
   FlatList,
   Dimensions,
-  Modal,
   ScrollView,
   Image,
   BackHandler,
   Alert,
-  Linking,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, {Line} from 'react-native-svg';
@@ -25,12 +23,16 @@ import {
   cancelAnimation,
   runOnJS,
 } from 'react-native-reanimated';
+import {Platform} from 'react-native';
 import {Contact, GraphNode, GraphLink, ContactGroup, RelationType} from '../types';
+import {Neutral, Radius, Shadow, Spacing, Typography} from '../theme/designSystem';
 import StorageService from '../services/StorageService';
 import ContactService from '../services/ContactService';
 import CacheService from '../services/CacheService';
 import MessageService from '../services/MessageService';
 import FriendRequestService from '../services/FriendRequestService';
+import OnlineStatusService from '../services/OnlineStatusService';
+import OnlineIndicator from '../components/OnlineIndicator';
 import {useTheme} from '../context/ThemeContext';
 
 interface HomeScreenProps {
@@ -53,13 +55,9 @@ const HomeScreen: React.FC<HomeScreenProps> = ({navigation}) => {
   const rotXShared = useSharedValue(0);
   const startRotYShared = useSharedValue(0);
   const startRotXShared = useSharedValue(0);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [modalTitle, setModalTitle] = useState('');
-  const [modalMessage, setModalMessage] = useState('');
-  const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
-  const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [hiddenGroups, setHiddenGroups] = useState<Set<string>>(new Set());
+  const [onlineStatuses, setOnlineStatuses] = useState<Record<string, boolean>>({});
 
   useAnimatedReaction(
     () => [rotXShared.value, rotYShared.value] as [number, number],
@@ -87,6 +85,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({navigation}) => {
     
     // Gérer le bouton retour Android sur l'écran Home
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!navigation.isFocused()) return false;
       Alert.alert(
         'Quitter l\'application',
         'Voulez-vous vraiment quitter GoodFriends ?',
@@ -127,25 +126,30 @@ const HomeScreen: React.FC<HomeScreenProps> = ({navigation}) => {
     }
   }, [searchQuery, contacts]);
 
-  useEffect(() => {
-    if (__DEV__ && modalVisible) {
-      console.log('[HomeScreen][modal][render]', {
-        visible: modalVisible,
-        title: modalTitle,
-        messageLength: (modalMessage || '').length,
-        messagePreview: (modalMessage || '').slice(0, 120),
-        selectedContactId: selectedContact?.id,
-      });
-    }
-  }, [modalVisible, modalTitle, modalMessage, selectedContact]);
+  
 
   const loadContacts = async () => {
-    // Invalider le cache pour toujours récupérer des données fraîches depuis l'API
+    // Affichage instantané depuis le cache
+    const cached = await CacheService.getCachedContacts();
+    if (cached && cached.length > 0) {
+      setContacts(cached);
+      setFilteredContacts(cached);
+    }
+    // Rafraîchissement en fond
     await CacheService.invalidateCache('contacts');
     const loadedContacts = await StorageService.getContacts();
     setContacts(loadedContacts);
     setFilteredContacts(loadedContacts);
   };
+
+  useEffect(() => {
+    const ids = contacts
+      .map(c => c.goodfriendsUserId)
+      .filter((id): id is string => !!id);
+    if (ids.length > 0) {
+      OnlineStatusService.getStatuses(ids).then(setOnlineStatuses);
+    }
+  }, [contacts]);
 
   const loadGroups = async () => {
     const loadedGroups = await StorageService.getGroups();
@@ -315,82 +319,17 @@ const HomeScreen: React.FC<HomeScreenProps> = ({navigation}) => {
   };
 
   const handleContactPress = async (contact: Contact) => {
-    const local = contacts.find(c => String(c.id) === String(contact.id)) || contact;
-    const localSummary = buildSummary(local);
+    // Naviguer directement vers le profil du contact
+    navigation.navigate('ContactProfile', {contactId: contact.id});
 
-    if (__DEV__) {
-      console.log('[HomeScreen][modal] local contact snapshot', {
-        pressedId: contact.id,
-        localId: local.id,
-        fromStateMatch: String(local.id) === String(contact.id),
-        names: `${local.firstName || ''} ${local.lastName || ''}`.trim(),
-        hasPhoto: !!local.photo,
-        hasDateOfBirth: !!local.dateOfBirth,
-        age: local.age,
-        childrenCount: Array.isArray(local.children) ? local.children.length : -1,
-        relCount: Array.isArray(local.relationships) ? local.relationships.length : -1,
-        hasAllergies: !!local.allergies,
-        travelsCount: Array.isArray(local.travels) ? local.travels.length : -1,
-        hasNotes: !!local.notes,
-        summaryLength: localSummary.length,
-        summaryPreview: localSummary.slice(0, 120),
-      });
-    }
-
-    // Affichage immédiat avec les données locales
-    setModalTitle(`${local.firstName} ${local.lastName}`);
-    setModalMessage(localSummary);
-    setSelectedContactId(local.id);
-    setSelectedContact(local);
-    setModalVisible(true);
-
-    // Rafraîchir depuis l'API pour éviter un cache obsolète
+    // Rafraîchir en arrière-plan
     try {
       await CacheService.invalidateCache('contacts');
       const freshContacts = await StorageService.getContacts();
       setContacts(freshContacts);
       setFilteredContacts(freshContacts);
-
-      if (__DEV__) {
-        console.log('[HomeScreen][modal] refreshed contacts', {
-          total: freshContacts.length,
-          searchedId: contact.id,
-        });
-      }
-
-      const fresh = freshContacts.find(c => String(c.id) === String(contact.id));
-      if (fresh) {
-        const freshSummary = buildSummary(fresh);
-
-        if (__DEV__) {
-          console.log('[HomeScreen][modal] fresh contact snapshot', {
-            freshId: fresh.id,
-            names: `${fresh.firstName || ''} ${fresh.lastName || ''}`.trim(),
-            hasPhoto: !!fresh.photo,
-            hasDateOfBirth: !!fresh.dateOfBirth,
-            age: fresh.age,
-            childrenCount: Array.isArray(fresh.children) ? fresh.children.length : -1,
-            relCount: Array.isArray(fresh.relationships) ? fresh.relationships.length : -1,
-            hasAllergies: !!fresh.allergies,
-            travelsCount: Array.isArray(fresh.travels) ? fresh.travels.length : -1,
-            hasNotes: !!fresh.notes,
-            summaryLength: freshSummary.length,
-            summaryPreview: freshSummary.slice(0, 120),
-          });
-        }
-
-        setModalTitle(`${fresh.firstName} ${fresh.lastName}`);
-        setModalMessage(freshSummary);
-        setSelectedContactId(fresh.id);
-        setSelectedContact(fresh);
-      } else if (__DEV__) {
-        console.log('[HomeScreen][modal] fresh contact NOT found by id', {
-          searchedId: contact.id,
-          sampleIds: freshContacts.slice(0, 10).map(c => c.id),
-        });
-      }
     } catch (error) {
-      console.log('[HomeScreen] Erreur refresh contact modal:', error);
+      console.log('[HomeScreen] Erreur refresh contacts:', error);
     }
   };
 
@@ -606,29 +545,81 @@ const HomeScreen: React.FC<HomeScreenProps> = ({navigation}) => {
       return contact.groupIds.every(gid => !hiddenGroups.has(gid));
     });
 
+    const renderListItem = ({item}: {item: Contact}) => {
+      const groupId = item.groupIds?.[0];
+      const group = groups.find(g => g.id === groupId);
+      const initials =
+        (item.firstName?.[0] || '').toUpperCase() +
+        (item.lastName?.[0] || '').toUpperCase();
+      const subtitle = item.age
+        ? `${item.age} ans`
+        : item.email || item.phone || '';
+
+      return (
+        <TouchableOpacity
+          style={styles.listItem}
+          onPress={() => handleContactPress(item)}
+          activeOpacity={0.75}>
+          <View style={{position: 'relative'}}>
+            {item.photo ? (
+              <Image source={{uri: item.photo}} style={styles.listAvatar} />
+            ) : (
+              <View style={[styles.listAvatarPlaceholder, {backgroundColor: theme.primary + '22'}]}>
+                <Text style={[styles.listAvatarInitials, {color: theme.primary}]}>
+                  {initials || '?'}
+                </Text>
+              </View>
+            )}
+            {item.goodfriendsUserId ? (
+              <OnlineIndicator isOnline={onlineStatuses[item.goodfriendsUserId] ?? false} size={13} />
+            ) : null}
+          </View>
+          <View style={styles.listInfo}>
+            <Text style={styles.listName}>
+              {item.firstName} {item.lastName}
+            </Text>
+            <View style={styles.listMeta}>
+              {group && (
+                <View style={[styles.groupBadge, {backgroundColor: (group.color || theme.primary) + '22'}]}>
+                  <Text style={[styles.groupBadgeText, {color: group.color || theme.primary}]}>
+                    {group.name.toUpperCase()}
+                  </Text>
+                </View>
+              )}
+              {subtitle ? (
+                <Text style={styles.listSubtitle} numberOfLines={1}>{subtitle}</Text>
+              ) : null}
+            </View>
+          </View>
+          {item.goodfriendsUserId ? (
+            <TouchableOpacity
+              style={styles.listActionBtn}
+              onPress={() =>
+                navigation.navigate('Chat', {
+                  otherUserId: item.goodfriendsUserId,
+                  otherUserFirstName: item.firstName,
+                  otherUserLastName: item.lastName,
+                  otherUserEmail: item.email,
+                })
+              }>
+              <MaterialIcons name="chat-bubble-outline" size={20} color={theme.secondary || theme.primary} />
+            </TouchableOpacity>
+          ) : (
+            <MaterialIcons name="chevron-right" size={22} color={Neutral[300]} />
+          )}
+        </TouchableOpacity>
+      );
+    };
+
     return (
       <FlatList
         data={visibleContacts}
-        keyExtractor={(item) => item.id}
-        renderItem={({item}) => (
-          <TouchableOpacity
-            style={styles.listItem}
-            onPress={() => handleContactPress(item)}>
-            <View style={styles.listItemContent}>
-              <Text style={styles.listItemName}>
-                {item.firstName} {item.lastName}
-              </Text>
-              {item.age && (
-                <Text style={styles.listItemDetail}>{item.age} ans</Text>
-              )}
-              {item.email && (
-                <Text style={styles.listItemDetail}>{item.email}</Text>
-              )}
-            </View>
-          </TouchableOpacity>
-        )}
+        keyExtractor={item => item.id}
+        renderItem={renderListItem}
+        contentContainerStyle={styles.listContent}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
+            <MaterialIcons name="people-outline" size={48} color={Neutral[300]} />
             <Text style={styles.emptyText}>Aucun contact trouvé</Text>
           </View>
         }
@@ -639,44 +630,48 @@ const HomeScreen: React.FC<HomeScreenProps> = ({navigation}) => {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Image
-          source={require('../../good friends large.png')}
-          style={styles.headerLogo}
-          resizeMode="contain"
-        />
-        <View style={styles.headerButtons}>
+        <View>
+          <Text style={styles.headerTitle}>Mon Répertoire</Text>
+          <Text style={styles.headerSubtitle}>
+            {filteredContacts.length} proche{filteredContacts.length !== 1 ? 's' : ''}
+          </Text>
+        </View>
+        <View style={styles.headerRight}>
           <TouchableOpacity
-            style={styles.messagesButton}
+            style={styles.notifBtn}
             onPress={() => navigation.navigate('Conversations')}>
-            <MaterialIcons name="chat" size={24} color="#fff" />
+            <MaterialIcons name="chat-bubble-outline" size={22} color="#383830" />
             {unreadCount > 0 && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+              <View style={[styles.notifBadge, {backgroundColor: theme.primary}]}>
+                <Text style={styles.notifBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
               </View>
             )}
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.settingsButton}
+            style={styles.settingsBtn}
             onPress={() => navigation.navigate('Settings')}>
-            <Text style={styles.settingsButtonText}>☰</Text>
+            <MaterialIcons name="tune" size={22} color="#383830" />
           </TouchableOpacity>
         </View>
       </View>
 
       <View style={styles.searchContainer}>
+        <MaterialIcons name="search" size={20} color={Neutral[400]} style={{marginRight: 8}} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Rechercher un contact..."
-          placeholderTextColor="#999"
+          placeholder="Rechercher un proche…"
+          placeholderTextColor={Neutral[400]}
           value={searchQuery}
           onChangeText={setSearchQuery}
         />
         <TouchableOpacity
-          style={styles.viewModeToggle}
+          style={[styles.viewModeToggle, {backgroundColor: theme.primary + '18'}]}
           onPress={() => setViewMode(viewMode === 'graph' ? 'list' : 'graph')}>
-          <Text style={styles.viewModeToggleText}>
-            {viewMode === 'graph' ? '☰☰' : '○'}
-          </Text>
+          <MaterialIcons
+            name={viewMode === 'graph' ? 'format-list-bulleted' : 'bubble-chart'}
+            size={20}
+            color={theme.primary}
+          />
         </TouchableOpacity>
       </View>
 
@@ -702,9 +697,6 @@ const HomeScreen: React.FC<HomeScreenProps> = ({navigation}) => {
                   <View style={[styles.legendDot, {backgroundColor: color}]} />
                   <Text style={[styles.legendText, isHidden && styles.legendTextHidden]}>
                     {group.name}
-                  </Text>
-                  <Text style={[styles.legendEye, isHidden && styles.legendEyeHidden]}>
-                    {isHidden ? '🚫' : '👁️'}
                   </Text>
                 </TouchableOpacity>
               );
@@ -742,91 +734,6 @@ const HomeScreen: React.FC<HomeScreenProps> = ({navigation}) => {
         onPress={() => navigation.navigate('AddContact')}>
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
-
-      <TouchableOpacity
-        style={styles.birthdayFab}
-        onPress={() => navigation.navigate('Birthdays')}>
-        <Text style={styles.birthdayFabText}>🎂</Text>
-      </TouchableOpacity>
-
-      {/* Modal personnalisé */}
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setModalVisible(false)}>
-          <View style={styles.modalInner} onStartShouldSetResponder={() => true}>
-            {selectedContact?.photo ? (
-              <View style={styles.modalPhotoHeader}>
-                <Image 
-                  source={{uri: selectedContact.photo}} 
-                  style={styles.modalPhotoHeaderImage}
-                  resizeMode="cover"
-                />
-                <View style={styles.modalPhotoHeaderOverlay}>
-                  <Text style={styles.modalPhotoHeaderName}>
-                    {selectedContact.firstName} {selectedContact.lastName}
-                  </Text>
-                </View>
-              </View>
-            ) : null}
-            <View style={[styles.modalContainer, selectedContact?.photo && styles.modalContainerWithPhoto]}>
-              <TouchableOpacity style={styles.modalCloseIcon} onPress={() => setModalVisible(false)}>
-                <Text style={styles.modalCloseIconText}>✕</Text>
-              </TouchableOpacity>
-              {selectedContact?.photo ? null : (
-                <Text style={styles.modalTitle}>{modalTitle}</Text>
-              )}
-              <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScrollContent}>
-                <Text style={styles.modalMessage}>
-                  {(modalMessage || '').trim() || 'Aucune information complémentaire.'}
-                </Text>
-              </ScrollView>
-              <View style={styles.modalButtons}>
-                <TouchableOpacity
-                  style={[styles.modalActionButton, styles.modalButtonSecondary]}
-                  onPress={() => {
-                    setModalVisible(false);
-                    if (selectedContactId) {
-                      navigation.navigate('ContactDetail', {contactId: selectedContactId});
-                    }
-                  }}>
-                  <MaterialIcons name="read-more" size={22} color="#555" />
-                  <Text style={[styles.modalActionLabel, {color: '#444'}]}>Voir plus</Text>
-                </TouchableOpacity>
-                {selectedContact?.phone ? (
-                  <TouchableOpacity
-                    style={[styles.modalActionButton, styles.modalButtonCall]}
-                    onPress={() => {
-                      setModalVisible(false);
-                      Linking.openURL(`tel:${selectedContact.phone}`);
-                    }}>
-                    <MaterialIcons name="call" size={22} color="#fff" />
-                    <Text style={styles.modalActionLabel}>Appeler</Text>
-                  </TouchableOpacity>
-                ) : null}
-                {selectedContact?.goodfriendsUserId ? (
-                  <TouchableOpacity
-                    style={[styles.modalActionButton, styles.modalButtonMessage]}
-                    onPress={() => {
-                      setModalVisible(false);
-                      navigation.navigate('Chat', {
-                        otherUserId: selectedContact.goodfriendsUserId,
-                        otherUserFirstName: selectedContact.firstName,
-                        otherUserLastName: selectedContact.lastName,
-                        otherUserEmail: selectedContact.email,
-                      });
-                    }}>
-                    <MaterialIcons name="chat" size={22} color="#fff" />
-                    <Text style={styles.modalActionLabel}>Message</Text>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-            </View>
-          </View>
-        </TouchableOpacity>
-      </Modal>
     </View>
   );
 };
@@ -834,113 +741,99 @@ const HomeScreen: React.FC<HomeScreenProps> = ({navigation}) => {
 const createStyles = (themeColors: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fcf9f0',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 40,
-    paddingBottom: 20,
-    backgroundColor: themeColors.primary,
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Platform.OS === 'android' ? 48 : 56,
+    paddingBottom: Spacing.base,
+    backgroundColor: '#fcf9f0',
   },
-  headerLogo: {
-    width: 180,
-    height: 40,
+  headerTitle: {
+    ...Typography.title,
+    color: '#383830',
+    fontSize: 22,
   },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
+  headerSubtitle: {
+    ...Typography.bodySm,
+    color: Neutral[500],
+    marginTop: 2,
   },
-  headerButtons: {
+  headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: Spacing.sm,
   },
-  messagesButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+  notifBtn: {
+    width: 40,
+    height: 40,
     borderRadius: 20,
-    position: 'relative',
-  },
-  badge: {
-    position: 'absolute',
-    top: -5,
-    right: -5,
-    backgroundColor: '#f44336',
-    borderRadius: 10,
-    minWidth: 20,
-    height: 20,
+    backgroundColor: Neutral[100],
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 5,
-    borderWidth: 2,
-    borderColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
+    position: 'relative',
   },
-  badgeText: {
+  notifBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 3,
+    borderWidth: 1.5,
+    borderColor: '#fcf9f0',
+  },
+  notifBadgeText: {
     color: '#fff',
-    fontSize: 10,
-    fontWeight: 'bold',
+    fontSize: 9,
+    fontWeight: '700',
   },
-  settingsButton: {
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-  },
-  settingsButtonText: {
-    fontSize: 28,
-    color: '#fff',
+  settingsBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Neutral[100],
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
+    marginHorizontal: Spacing.base,
+    marginBottom: Spacing.sm,
+    paddingHorizontal: Spacing.base,
     paddingVertical: 10,
-    backgroundColor: '#fff',
-    gap: 8,
+    backgroundColor: Neutral[0],
+    borderRadius: Radius.lg,
+    ...Shadow.sm,
+    gap: 0,
   },
   searchInput: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 10,
-    fontSize: 16,
+    ...Typography.body,
+    color: Neutral[800],
+    paddingVertical: 0,
   },
   viewModeToggle: {
-    backgroundColor: themeColors.primary,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    width: 36,
+    height: 36,
+    borderRadius: Radius.md,
     justifyContent: 'center',
     alignItems: 'center',
-    minWidth: 44,
-  },
-  viewModeToggleText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-    letterSpacing: 1,
+    marginLeft: 4,
   },
   legendRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f7f7f7',
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    minHeight: 50,
+    paddingVertical: 6,
+    paddingHorizontal: Spacing.base,
+    minHeight: 44,
   },
   legendContent: {
     flexDirection: 'row',
@@ -1006,41 +899,92 @@ const createStyles = (themeColors: any) => StyleSheet.create({
     textShadowOffset: {width: 0, height: 1},
     textShadowRadius: 2,
   },
+  listContent: {
+    paddingHorizontal: Spacing.base,
+    paddingBottom: 96,
+    gap: 8,
+  },
   listItem: {
-    backgroundColor: '#fff',
-    padding: 15,
-    marginHorizontal: 15,
-    marginVertical: 5,
-    borderRadius: 10,
+    backgroundColor: Neutral[0],
+    borderRadius: Radius.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.base,
+    paddingVertical: 12,
+    ...Shadow.sm,
   },
-  listItemContent: {
-    flexDirection: 'column',
+  listAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    marginRight: Spacing.md,
   },
-  listItemName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 5,
+  listAvatarPlaceholder: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    marginRight: Spacing.md,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  listItemDetail: {
-    fontSize: 14,
-    color: '#666',
+  listAvatarInitials: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  listInfo: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  listName: {
+    ...Typography.titleSm,
+    color: '#383830',
+    marginBottom: 4,
+  },
+  listMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  groupBadge: {
+    borderRadius: Radius.full,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  groupBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+  },
+  listSubtitle: {
+    ...Typography.bodySm,
+    color: Neutral[500],
+  },
+  listActionBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Neutral[100],
+    marginLeft: Spacing.sm,
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 40,
+    gap: 12,
   },
   emptyText: {
-    fontSize: 16,
-    color: '#999',
+    ...Typography.bodyMd,
+    color: Neutral[400],
     textAlign: 'center',
   },
   fab: {
     position: 'absolute',
     right: 20,
-    bottom: 20,
+    bottom: 92,
     width: 60,
     height: 60,
     borderRadius: 30,
@@ -1057,25 +1001,6 @@ const createStyles = (themeColors: any) => StyleSheet.create({
     fontSize: 30,
     color: '#fff',
     fontWeight: 'bold',
-  },
-  birthdayFab: {
-    position: 'absolute',
-    left: 20,
-    bottom: 20,
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#FF9800',
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-  },
-  birthdayFabText: {
-    fontSize: 30,
   },
   legend: {
     flexDirection: 'row',

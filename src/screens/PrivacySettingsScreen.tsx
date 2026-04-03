@@ -1,4 +1,4 @@
-import React, {useState, useEffect} from 'react';
+import React, {useState, useEffect, useCallback} from 'react';
 import {
   View,
   Text,
@@ -7,9 +7,29 @@ import {
   ScrollView,
   Switch,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import ApiClient from '../services/ApiClient';
+import API_CONFIG from '../config/api';
+
+const STORAGE_KEY = '@privacy_settings';
+
+interface PrivacySettings {
+  isProfilePublic: boolean;
+  showOnlineStatus: boolean;
+  allowSearchByEmail: boolean;
+  allowSearchByPhone: boolean;
+}
+
+const DEFAULT_SETTINGS: PrivacySettings = {
+  isProfilePublic: true,
+  showOnlineStatus: true,
+  allowSearchByEmail: true,
+  allowSearchByPhone: true,
+};
 
 interface PrivacySettingsScreenProps {
   navigation: any;
@@ -17,146 +37,144 @@ interface PrivacySettingsScreenProps {
 
 const PrivacySettingsScreen: React.FC<PrivacySettingsScreenProps> = ({navigation}) => {
   const {theme} = useTheme();
-  const [isProfilePublic, setIsProfilePublic] = useState(true);
-  const [showOnlineStatus, setShowOnlineStatus] = useState(true);
-  const [allowSearchByEmail, setAllowSearchByEmail] = useState(true);
-  const [allowSearchByPhone, setAllowSearchByPhone] = useState(true);
+  const [settings, setSettings] = useState<PrivacySettings>(DEFAULT_SETTINGS);
+  const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
-    loadPrivacySettings();
+    loadSettings();
   }, []);
 
-  const loadPrivacySettings = async () => {
+  const loadSettings = useCallback(async () => {
+    // 1. Afficher immédiatement ce qui est en cache local
     try {
-      const settings = await AsyncStorage.getItem('@privacy_settings');
-      if (settings) {
-        const parsed = JSON.parse(settings);
-        setIsProfilePublic(parsed.isProfilePublic ?? true);
-        setShowOnlineStatus(parsed.showOnlineStatus ?? true);
-        setAllowSearchByEmail(parsed.allowSearchByEmail ?? true);
-        setAllowSearchByPhone(parsed.allowSearchByPhone ?? true);
+      const cached = await AsyncStorage.getItem(STORAGE_KEY);
+      if (cached) {
+        setSettings({...DEFAULT_SETTINGS, ...JSON.parse(cached)});
       }
-    } catch (error) {
-      console.error('Error loading privacy settings:', error);
-    }
-  };
+    } catch {}
 
-  const savePrivacySettings = async (newSettings: any) => {
+    // 2. Synchroniser depuis l'API en arrière-plan
+    setSyncing(true);
     try {
-      await AsyncStorage.setItem('@privacy_settings', JSON.stringify(newSettings));
-    } catch (error) {
-      console.error('Error saving privacy settings:', error);
-      Alert.alert('Erreur', 'Impossible de sauvegarder les paramètres');
+      const res: any = await ApiClient.get(API_CONFIG.ENDPOINTS.PRIVACY);
+      if (res?.success && res.data) {
+        const remote: PrivacySettings = {
+          isProfilePublic:    res.data.isProfilePublic    ?? true,
+          showOnlineStatus:   res.data.showOnlineStatus   ?? true,
+          allowSearchByEmail: res.data.allowSearchByEmail ?? true,
+          allowSearchByPhone: res.data.allowSearchByPhone ?? true,
+        };
+        setSettings(remote);
+        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(remote));
+      }
+    } catch {
+      // Mode hors-ligne — on garde le cache local
+    } finally {
+      setSyncing(false);
     }
-  };
+  }, []);
 
-  const handleToggleProfileVisibility = async (value: boolean) => {
-    setIsProfilePublic(value);
-    const settings = {
-      isProfilePublic: value,
-      showOnlineStatus,
-      allowSearchByEmail,
-      allowSearchByPhone,
-    };
-    await savePrivacySettings(settings);
-    
-    Alert.alert(
-      'Profil ' + (value ? 'Public' : 'Privé'),
-      value
-        ? 'Votre profil est visible par tous les utilisateurs de GoodFriends'
-        : 'Seuls vos amis peuvent voir votre profil'
-    );
-  };
+  const saveSettings = useCallback(async (newSettings: PrivacySettings) => {
+    // Mise à jour optimiste
+    setSettings(newSettings);
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(newSettings));
 
-  const handleToggleOnlineStatus = async (value: boolean) => {
-    setShowOnlineStatus(value);
-    const settings = {
-      isProfilePublic,
-      showOnlineStatus: value,
-      allowSearchByEmail,
-      allowSearchByPhone,
-    };
-    await savePrivacySettings(settings);
-  };
+    setSaving(true);
+    try {
+      await ApiClient.put(API_CONFIG.ENDPOINTS.PRIVACY, newSettings);
+    } catch {
+      Alert.alert(
+        'Hors ligne',
+        'Les préférences ont été sauvegardées localement et seront synchronisées à la prochaine connexion.',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }, []);
 
-  const handleToggleSearchByEmail = async (value: boolean) => {
-    setAllowSearchByEmail(value);
-    const settings = {
-      isProfilePublic,
-      showOnlineStatus,
-      allowSearchByEmail: value,
-      allowSearchByPhone,
-    };
-    await savePrivacySettings(settings);
-  };
+  const toggle = useCallback(
+    async (key: keyof PrivacySettings, value: boolean) => {
+      const updated = {...settings, [key]: value};
+      await saveSettings(updated);
 
-  const handleToggleSearchByPhone = async (value: boolean) => {
-    setAllowSearchByPhone(value);
-    const settings = {
-      isProfilePublic,
-      showOnlineStatus,
-      allowSearchByEmail,
-      allowSearchByPhone: value,
-    };
-    await savePrivacySettings(settings);
-  };
+      if (key === 'isProfilePublic') {
+        Alert.alert(
+          value ? 'Profil Public' : 'Profil Privé',
+          value
+            ? 'Votre profil est désormais visible par tous les utilisateurs.'
+            : 'Seuls vos amis peuvent voir votre profil.',
+        );
+      }
+    },
+    [settings, saveSettings],
+  );
 
   return (
     <ScrollView style={styles(theme).container}>
       <View style={styles(theme).header}>
         <View style={styles(theme).headerRow}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-            <Text style={styles(theme).backButtonText}>←</Text>
+            <View style={styles(theme).backBtnCircle}>
+              <MaterialIcons name="arrow-back" size={22} color="#383830" />
+            </View>
           </TouchableOpacity>
-          <Text style={styles(theme).headerTitle}>Confidentialité</Text>
+          <View style={{flex: 1}}>
+            <Text style={styles(theme).headerTitle}>Confidentialité</Text>
+            <Text style={styles(theme).headerSubtitle}>Contrôlez qui peut voir vos informations</Text>
+          </View>
+          {(syncing || saving) && (
+            <ActivityIndicator size="small" color={theme.primary} style={{marginLeft: 8}} />
+          )}
         </View>
-        <Text style={styles(theme).headerSubtitle}>
-          Contrôlez qui peut voir vos informations
-        </Text>
       </View>
 
+      {/* ── Visibilité du profil ── */}
       <View style={styles(theme).section}>
         <Text style={styles(theme).sectionTitle}>Visibilité du profil</Text>
         <Text style={styles(theme).sectionDescription}>
           Contrôlez qui peut voir vos informations
         </Text>
-        
+
         <View style={styles(theme).settingRow}>
           <View style={styles(theme).settingInfo}>
             <Text style={styles(theme).settingTitle}>Profil Public</Text>
             <Text style={styles(theme).settingDescription}>
-              {isProfilePublic
+              {settings.isProfilePublic
                 ? 'Votre profil est visible par tous'
                 : 'Seuls vos amis peuvent voir votre profil'}
             </Text>
           </View>
           <Switch
-            value={isProfilePublic}
-            onValueChange={handleToggleProfileVisibility}
+            value={settings.isProfilePublic}
+            onValueChange={v => toggle('isProfilePublic', v)}
             trackColor={{false: '#767577', true: '#81b0ff'}}
-            thumbColor={isProfilePublic ? theme.primary : '#f4f3f4'}
+            thumbColor={settings.isProfilePublic ? theme.primary : '#f4f3f4'}
           />
         </View>
       </View>
 
+      {/* ── Recherche ── */}
       <View style={styles(theme).section}>
         <Text style={styles(theme).sectionTitle}>Recherche</Text>
         <Text style={styles(theme).sectionDescription}>
           Définissez comment les autres peuvent vous trouver
         </Text>
-        
+
         <View style={styles(theme).settingRow}>
           <View style={styles(theme).settingInfo}>
             <Text style={styles(theme).settingTitle}>Recherche par email</Text>
             <Text style={styles(theme).settingDescription}>
-              Les autres utilisateurs peuvent vous trouver avec votre adresse email
+              {settings.allowSearchByEmail
+                ? 'Les autres peuvent vous trouver par email'
+                : 'Vous n\'apparaissez pas dans les recherches par email'}
             </Text>
           </View>
           <Switch
-            value={allowSearchByEmail}
-            onValueChange={handleToggleSearchByEmail}
+            value={settings.allowSearchByEmail}
+            onValueChange={v => toggle('allowSearchByEmail', v)}
             trackColor={{false: '#767577', true: '#81b0ff'}}
-            thumbColor={allowSearchByEmail ? theme.primary : '#f4f3f4'}
+            thumbColor={settings.allowSearchByEmail ? theme.primary : '#f4f3f4'}
           />
         </View>
 
@@ -164,33 +182,38 @@ const PrivacySettingsScreen: React.FC<PrivacySettingsScreenProps> = ({navigation
           <View style={styles(theme).settingInfo}>
             <Text style={styles(theme).settingTitle}>Recherche par téléphone</Text>
             <Text style={styles(theme).settingDescription}>
-              Les autres utilisateurs peuvent vous trouver avec votre numéro de téléphone
+              {settings.allowSearchByPhone
+                ? 'Les autres peuvent vous trouver par numéro'
+                : 'Vous n\'apparaissez pas dans les recherches par téléphone'}
             </Text>
           </View>
           <Switch
-            value={allowSearchByPhone}
-            onValueChange={handleToggleSearchByPhone}
+            value={settings.allowSearchByPhone}
+            onValueChange={v => toggle('allowSearchByPhone', v)}
             trackColor={{false: '#767577', true: '#81b0ff'}}
-            thumbColor={allowSearchByPhone ? theme.primary : '#f4f3f4'}
+            thumbColor={settings.allowSearchByPhone ? theme.primary : '#f4f3f4'}
           />
         </View>
       </View>
 
+      {/* ── Activité ── */}
       <View style={styles(theme).section}>
         <Text style={styles(theme).sectionTitle}>Activité</Text>
-        
+
         <View style={styles(theme).settingRow}>
           <View style={styles(theme).settingInfo}>
             <Text style={styles(theme).settingTitle}>Afficher mon statut en ligne</Text>
             <Text style={styles(theme).settingDescription}>
-              Les autres peuvent voir quand vous êtes actif
+              {settings.showOnlineStatus
+                ? 'Les autres peuvent voir quand vous êtes actif'
+                : 'Votre statut en ligne est masqué'}
             </Text>
           </View>
           <Switch
-            value={showOnlineStatus}
-            onValueChange={handleToggleOnlineStatus}
+            value={settings.showOnlineStatus}
+            onValueChange={v => toggle('showOnlineStatus', v)}
             trackColor={{false: '#767577', true: '#81b0ff'}}
-            thumbColor={showOnlineStatus ? theme.primary : '#f4f3f4'}
+            thumbColor={settings.showOnlineStatus ? theme.primary : '#f4f3f4'}
           />
         </View>
       </View>
@@ -198,8 +221,8 @@ const PrivacySettingsScreen: React.FC<PrivacySettingsScreenProps> = ({navigation
       <View style={styles(theme).infoBox}>
         <Text style={styles(theme).infoIcon}>ℹ️</Text>
         <Text style={styles(theme).infoText}>
-          Ces paramètres vous aident à contrôler votre confidentialité sur GoodFriends.
-          Vous pouvez les modifier à tout moment.
+          Ces paramètres sont synchronisés avec le serveur et pris en compte
+          immédiatement lors des recherches d'autres utilisateurs.
         </Text>
       </View>
     </ScrollView>
@@ -209,37 +232,39 @@ const PrivacySettingsScreen: React.FC<PrivacySettingsScreenProps> = ({navigation
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fcf9f0',
   },
   header: {
-    backgroundColor: theme.primary,
-    padding: 20,
-    paddingTop: 40,
-    paddingBottom: 30,
+    backgroundColor: '#fcf9f0',
+    paddingHorizontal: 20,
+    paddingTop: 48,
+    paddingBottom: 16,
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 5,
+    gap: 12,
   },
   backButton: {
-    marginRight: 15,
-    padding: 5,
+    padding: 0,
   },
-  backButtonText: {
-    fontSize: 28,
-    color: '#fff',
-    fontWeight: 'bold',
+  backBtnCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 5,
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#383830',
   },
   headerSubtitle: {
-    fontSize: 14,
-    color: '#E3F2FD',
+    fontSize: 13,
+    color: '#65655c',
+    marginTop: 2,
   },
   section: {
     backgroundColor: '#fff',

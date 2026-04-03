@@ -16,12 +16,11 @@ import {
 } from 'react-native';
 import {launchImageLibrary} from 'react-native-image-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import {Picker} from '@react-native-picker/picker';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
-import {Contact, ContactGroup, RelationType, Child, Relationship, ProfessionStudy} from '../types';
+import {Contact, ContactGroup, RelationType, Child, Relationship, ProfessionStudy, FamilyMemberInfo} from '../types';
 import ContactService from '../services/ContactService';
 import StorageService from '../services/StorageService';
-import FriendRequestService from '../services/FriendRequestService';
 import CacheService from '../services/CacheService';
 
 interface ContactDetailScreenProps {
@@ -52,9 +51,6 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
   const [loading, setLoading] = useState(false);
   const [relationships, setRelationships] = useState<Contact[]>([]);
   const [photoUri, setPhotoUri] = useState<string | undefined>(undefined);
-  const [hasGoodFriendsAccount, setHasGoodFriendsAccount] = useState(false);
-  const [goodFriendsUserId, setGoodFriendsUserId] = useState<string | null>(null);
-  const [friendRequestStatus, setFriendRequestStatus] = useState<'none' | 'pending' | 'accepted' | 'sending'>('none');
   const [children, setChildren] = useState<Child[]>([]);
   const [newChildName, setNewChildName] = useState('');
   const [newChildDateOfBirth, setNewChildDateOfBirth] = useState<Date | undefined>(undefined);
@@ -63,6 +59,13 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
   const [showAddChildForm, setShowAddChildForm] = useState(false);
   const [showChildDatePicker, setShowChildDatePicker] = useState(false);
   const [editingChildId, setEditingChildId] = useState<string | null>(null);
+  const [newChildGifts, setNewChildGifts] = useState<string[]>([]);
+  const [newGiftInput, setNewGiftInput] = useState('');
+  const [showGroupPickerModal, setShowGroupPickerModal] = useState(false);
+  const [showContactPickerModal2, setShowContactPickerModal2] = useState(false);
+  const [contactPickerMode, setContactPickerMode] = useState<'family' | 'social'>('social');
+  const [contactSearchQuery, setContactSearchQuery] = useState('');
+  const [showRelationTypeModal, setShowRelationTypeModal] = useState(false);
   const [messageModalVisible, setMessageModalVisible] = useState(false);
   const [selectedMessageIndex, setSelectedMessageIndex] = useState(0);
   const [customMessage, setCustomMessage] = useState('');
@@ -71,6 +74,18 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
   const [selectedRelationType, setSelectedRelationType] = useState<RelationType>(RelationType.FRIEND);
   const [customRelationLabel, setCustomRelationLabel] = useState('');
   const [availableContacts, setAvailableContacts] = useState<Contact[]>([]);
+  // Offline family members (sans compte Goodfriends)
+  const [familyMembers, setFamilyMembers] = useState<FamilyMemberInfo[]>([]);
+  const [showAddFamilyMemberForm, setShowAddFamilyMemberForm] = useState(false);
+  const [editingFamilyMemberId, setEditingFamilyMemberId] = useState<string | null>(null);
+  const [newFMFirstName, setNewFMFirstName] = useState('');
+  const [newFMLastName, setNewFMLastName] = useState('');
+  const [newFMDateOfBirth, setNewFMDateOfBirth] = useState<string | undefined>(undefined);
+  const [newFMGender, setNewFMGender] = useState<'male' | 'female' | 'other'>('female');
+  const [newFMRelationType, setNewFMRelationType] = useState<RelationType>(RelationType.SIBLING);
+  const [newFMNotes, setNewFMNotes] = useState('');
+  const [showFMDatePicker, setShowFMDatePicker] = useState(false);
+  const [showFMRelationTypeModal, setShowFMRelationTypeModal] = useState(false);
   const [professionsStudies, setProfessionsStudies] = useState<ProfessionStudy[]>([]);
   const [newProfTitle, setNewProfTitle] = useState('');
   const [newProfYear, setNewProfYear] = useState<number | undefined>(undefined);
@@ -148,6 +163,7 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
       setPhotoUri(foundContact.photo);
       setChildren(foundContact.children || []);
       setProfessionsStudies(foundContact.professionsStudies || []);
+      setFamilyMembers(foundContact.familyMembers || []);
       
       // Charger les relations et filtrer les doublons
       const relatedContacts = await ContactService.getContactRelationships(contactId);
@@ -160,10 +176,6 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
       // Charger les contacts disponibles maintenant que le contact est chargé
       await loadAvailableContacts(foundContact);
       
-      // Vérifier si le contact a un compte GoodFriends
-      if (!foundContact.goodfriendsUserId && (foundContact.email || foundContact.phone)) {
-        checkGoodFriendsAccount(foundContact.email, foundContact.phone);
-      }
     }
   };
 
@@ -267,63 +279,6 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
     );
   };
 
-  const checkGoodFriendsAccount = async (email?: string, phone?: string) => {
-    try {
-      let foundUser = null;
-      if (email) {
-        const users = await FriendRequestService.searchUsers(email);
-        if (users.length > 0) foundUser = users[0];
-      }
-      if (!foundUser && phone) {
-        const users = await FriendRequestService.searchUsers(phone);
-        if (users.length > 0) foundUser = users[0];
-      }
-      if (foundUser) {
-        setHasGoodFriendsAccount(true);
-        setGoodFriendsUserId(foundUser.id);
-        const status = foundUser.requestStatus;
-        if (status === 'pending') {
-          setFriendRequestStatus('pending');
-        } else if (status === 'accepted') {
-          setFriendRequestStatus('accepted');
-        } else {
-          // requestStatus null ou 'rejected' : vérifier aussi les demandes envoyées
-          // pour couvrir les cas où la DB renvoie un résultat inattendu
-          try {
-            const sentRequests = await FriendRequestService.getSentRequests();
-            const alreadySent = sentRequests.some(r => r.id === foundUser!.id);
-            setFriendRequestStatus(alreadySent ? 'pending' : 'none');
-          } catch {
-            setFriendRequestStatus('none');
-          }
-        }
-      }
-    } catch (error) {
-      console.log('Erreur lors de la vérification du compte GoodFriends:', error);
-    }
-  };
-
-  const handleAddFriend = async () => {
-    if (!goodFriendsUserId || friendRequestStatus !== 'none') return;
-
-    setFriendRequestStatus('sending');
-    try {
-      await FriendRequestService.sendFriendRequest(goodFriendsUserId);
-      setFriendRequestStatus('pending');
-      Alert.alert('Succès', 'Demande d\'ami envoyée !');
-    } catch (error: any) {
-      const apiMessage: string = error?.response?.data?.message || error?.message || '';
-      if (apiMessage === 'Une demande est déjà en attente') {
-        setFriendRequestStatus('pending');
-      } else if (apiMessage === 'Vous êtes déjà amis') {
-        setFriendRequestStatus('accepted');
-      } else {
-        setFriendRequestStatus('none');
-        Alert.alert('Erreur', apiMessage || 'Impossible d\'envoyer la demande');
-      }
-    }
-  };
-
   const handleAddChild = () => {
     if (!newChildName.trim()) {
       Alert.alert('Erreur', 'Veuillez entrer un prénom');
@@ -340,6 +295,7 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
               dateOfBirth: newChildDateOfBirth,
               gender: newChildGender,
               notes: newChildNotes.trim() || undefined,
+              gifts: newChildGifts.length > 0 ? [...newChildGifts] : undefined,
             }
           : c
       );
@@ -353,6 +309,7 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
         dateOfBirth: newChildDateOfBirth,
         gender: newChildGender,
         notes: newChildNotes.trim() || undefined,
+        gifts: newChildGifts.length > 0 ? [...newChildGifts] : undefined,
       };
 
       const updatedChildren = [...children, newChild];
@@ -369,6 +326,8 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
     setNewChildDateOfBirth(undefined);
     setNewChildGender('male');
     setNewChildNotes('');
+    setNewChildGifts([]);
+    setNewGiftInput('');
     setShowAddChildForm(false);
     setEditingChildId(null);
   };
@@ -379,6 +338,8 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
     setNewChildDateOfBirth(child.dateOfBirth ? new Date(child.dateOfBirth) : undefined);
     setNewChildGender(child.gender || 'male');
     setNewChildNotes(child.notes || '');
+    setNewChildGifts(child.gifts ? [...child.gifts] : []);
+    setNewGiftInput('');
     setShowAddChildForm(true);
   };
 
@@ -395,6 +356,47 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
             const updatedChildren = children.filter(c => c.id !== childId);
             setChildren(updatedChildren);
             saveChildrenToContact(updatedChildren);
+          },
+        },
+      ],
+    );
+  };
+
+  const handleDetachChild = (child: Child) => {
+    Alert.alert(
+      'Créer un contact',
+      `Voulez-vous créer un contact indépendant pour ${child.firstName} ?`,
+      [
+        {text: 'Annuler', style: 'cancel'},
+        {
+          text: 'Créer',
+          onPress: async () => {
+            const newContact: Contact = {
+              id: Date.now().toString(),
+              firstName: child.firstName,
+              lastName: '',
+              dateOfBirth: child.dateOfBirth,
+              gender: child.gender,
+              notes: [
+                child.notes,
+                child.gifts && child.gifts.length > 0
+                  ? `Cadeaux: ${child.gifts.join(', ')}`
+                  : undefined,
+              ].filter(Boolean).join('\n') || undefined,
+              groupIds: [],
+              children: [],
+              relationships: [],
+              professionsStudies: [],
+              travels: [],
+              allergies: '',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            await ContactService.createContact(newContact);
+            const updatedChildren = children.filter(c => c.id !== child.id);
+            setChildren(updatedChildren);
+            saveChildrenToContact(updatedChildren);
+            Alert.alert('Succès', `${child.firstName} a été créé comme contact.`);
           },
         },
       ],
@@ -678,6 +680,88 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
     );
   };
 
+  // ── Famille hors-Goodfriends ──────────────────────────────────────────────
+  const FAMILY_RELATION_TYPES: RelationType[] = [
+    RelationType.SPOUSE, RelationType.CHILD, RelationType.PARENT,
+    RelationType.FATHER, RelationType.MOTHER, RelationType.SIBLING,
+    RelationType.COUSIN, RelationType.STEPMOTHER, RelationType.STEPFATHER,
+  ];
+
+  const FAMILY_RELATION_LABELS: Record<string, string> = {
+    [RelationType.SPOUSE]:      'Conjoint(e)',
+    [RelationType.CHILD]:       'Enfant',
+    [RelationType.PARENT]:      'Parent',
+    [RelationType.FATHER]:      'Père',
+    [RelationType.MOTHER]:      'Mère',
+    [RelationType.SIBLING]:     'Frère/Sœur',
+    [RelationType.COUSIN]:      'Cousin(e)',
+    [RelationType.STEPMOTHER]:  'Belle-mère',
+    [RelationType.STEPFATHER]:  'Beau-père',
+  };
+
+  const isFamilyRelationType = (type: RelationType) =>
+    FAMILY_RELATION_TYPES.includes(type);
+
+  const calcFMAge = (dob?: string): string => {
+    if (!dob) return '';
+    const diff = Date.now() - new Date(dob).getTime();
+    const age = Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25));
+    return age >= 0 ? `${age} ans` : '';
+  };
+
+  const resetFMForm = () => {
+    setNewFMFirstName('');
+    setNewFMLastName('');
+    setNewFMDateOfBirth(undefined);
+    setNewFMGender('female');
+    setNewFMRelationType(RelationType.SIBLING);
+    setNewFMNotes('');
+    setShowAddFamilyMemberForm(false);
+    setEditingFamilyMemberId(null);
+  };
+
+  const handleAddFamilyMember = () => {
+    if (!newFMFirstName.trim()) {
+      Alert.alert('Erreur', 'Le prénom est obligatoire');
+      return;
+    }
+    const newFM: FamilyMemberInfo = {
+      id: editingFamilyMemberId || `fm_${Date.now()}`,
+      firstName: newFMFirstName.trim(),
+      lastName: newFMLastName.trim() || undefined,
+      dateOfBirth: newFMDateOfBirth,
+      gender: newFMGender,
+      relationType: newFMRelationType,
+      notes: newFMNotes.trim() || undefined,
+    };
+    if (editingFamilyMemberId) {
+      setFamilyMembers(familyMembers.map(fm => fm.id === editingFamilyMemberId ? newFM : fm));
+    } else {
+      setFamilyMembers([...familyMembers, newFM]);
+    }
+    resetFMForm();
+  };
+
+  const handleEditFamilyMember = (fm: FamilyMemberInfo) => {
+    setEditingFamilyMemberId(fm.id);
+    setNewFMFirstName(fm.firstName);
+    setNewFMLastName(fm.lastName || '');
+    setNewFMDateOfBirth(fm.dateOfBirth);
+    setNewFMGender(fm.gender || 'female');
+    setNewFMRelationType(fm.relationType);
+    setNewFMNotes(fm.notes || '');
+    setShowAddFamilyMemberForm(true);
+  };
+
+  const handleDeleteFamilyMember = (id: string) => {
+    Alert.alert('Supprimer', 'Supprimer ce membre de la famille ?', [
+      {text: 'Annuler', style: 'cancel'},
+      {text: 'Supprimer', style: 'destructive', onPress: () =>
+        setFamilyMembers(familyMembers.filter(fm => fm.id !== id))},
+    ]);
+  };
+  // ─────────────────────────────────────────────────────────────────────────
+
   const handleSave = async () => {
     if (!firstName || !lastName) {
       Alert.alert('Erreur', 'Le prénom et le nom sont obligatoires');
@@ -703,15 +787,54 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
         groupIds: selectedGroupId ? [selectedGroupId] : [],
         children: children,
         professionsStudies: professionsStudies,
+        familyMembers: familyMembers,
         updatedAt: new Date(),
       };
 
       await StorageService.updateContact(updatedContact);
-      
+
+      // ── Sync bidirectionnelle des membres de la famille ──────────────────
+      // Si A a des membres famille hors-Goodfriends, les propager aux contacts
+      // Goodfriends frères/sœurs de A (et aux parents GF de A pour les enfants)
+      if (familyMembers.length > 0 && contact?.relationships?.length) {
+        const SIBLING_TYPES = [RelationType.SIBLING, RelationType.COUSIN];
+        const PARENT_TYPES  = [RelationType.FATHER, RelationType.MOTHER, RelationType.PARENT];
+        const allContacts = await StorageService.getContacts();
+
+        for (const rel of contact!.relationships) {
+          const targetContact = allContacts.find(c => c.id === rel.contactId);
+          if (!targetContact) continue;
+          const isGFSibling = SIBLING_TYPES.includes(rel.relationType);
+          const isGFParent  = PARENT_TYPES.includes(rel.relationType);
+          if (!isGFSibling && !isGFParent) continue;
+
+          const existingFM = targetContact.familyMembers ?? [];
+          let changed = false;
+
+          for (const fm of familyMembers) {
+            // Pour un frère/sœur GF : héritera des frères/sœurs et des parents hors-GF de A
+            // Pour un parent GF       : héritera des frères/sœurs de A comme enfants
+            const alreadyThere = existingFM.some(
+              em => em.firstName === fm.firstName &&
+                    (em.lastName ?? '') === (fm.lastName ?? '') &&
+                    em.relationType === fm.relationType
+            );
+            if (!alreadyThere) {
+              existingFM.push({ ...fm, id: `sync-${Date.now()}-${Math.random().toString(36).slice(2)}` });
+              changed = true;
+            }
+          }
+
+          if (changed) {
+            await StorageService.updateContact({ ...targetContact, familyMembers: existingFM, updatedAt: new Date() });
+          }
+        }
+      }
+
       // Invalider le cache pour forcer une synchronisation avec l'API
       await CacheService.invalidateCache('contacts');
       
-      setSaveSuccessVisible(true);
+      navigation.goBack();
     } catch (error: any) {
       Alert.alert('Erreur', error.message);
     } finally {
@@ -830,7 +953,7 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
         <View style={styles(theme).header}>
           <View style={styles(theme).headerRow}>
             <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-              <Text style={styles(theme).backButtonText}>←</Text>
+              <MaterialIcons name="arrow-back" size={24} color="#FFF" />
             </TouchableOpacity>
             <Text style={styles(theme).headerTitle}>Modifier le contact</Text>
           </View>
@@ -927,14 +1050,14 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
                 <TouchableOpacity
                   style={styles(theme).calendarIconButton}
                   onPress={handleAddToCalendar}>
-                  <Text style={styles(theme).calendarIconButtonText}>📅</Text>
+                  <MaterialIcons name="event" size={20} color={theme.primary} />
                 </TouchableOpacity>
 
                 {calculateDaysUntilBirthday(dateOfBirth) <= 7 && phone && (
                   <TouchableOpacity
                     style={styles(theme).sendBirthdayMessageButton}
                     onPress={openMessageModal}>
-                    <Text style={styles(theme).sendBirthdayMessageButtonText}>✉️</Text>
+                    <MaterialIcons name="mail-outline" size={20} color="#FFF" />
                   </TouchableOpacity>
                 )}
               </View>
@@ -956,7 +1079,12 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
                   <TouchableOpacity 
                     onPress={() => handleEditChild(child)}
                     style={styles(theme).editChildButton}>
-                    <Text style={styles(theme).editChildText}>✏️</Text>
+                    <MaterialIcons name="edit" size={16} color={theme.primary} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles(theme).detachChildButton}
+                    onPress={() => handleDetachChild(child)}>
+                    <MaterialIcons name="person-add" size={16} color={theme.primary} />
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => handleDeleteChild(child.id)}>
                     <Text style={styles(theme).deleteChildText}>✕</Text>
@@ -969,14 +1097,23 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
                 </Text>
               )}
               {child.dateOfBirth && (
-                <Text style={styles(theme).childDetailText}>
-                  📅 {new Date(child.dateOfBirth).toLocaleDateString('fr-FR')}
-                </Text>
+                <View style={styles(theme).childDetailRow}>
+                  <MaterialIcons name="event" size={13} color={theme.textSecondary} />
+                  <Text style={styles(theme).childDetailText}>
+                    {' '}{new Date(child.dateOfBirth).toLocaleDateString('fr-FR')}
+                  </Text>
+                </View>
               )}
               {child.notes && (
-                <Text style={styles(theme).childNotesText}>
-                  💬 {child.notes}
-                </Text>
+                <Text style={styles(theme).childNotesText}>{child.notes}</Text>
+              )}
+              {child.gifts && child.gifts.length > 0 && (
+                <View style={styles(theme).giftsRow}>
+                  <MaterialIcons name="card-giftcard" size={13} color={theme.textSecondary} />
+                  <Text style={styles(theme).childDetailText}>
+                    {' '}{child.gifts.join(', ')}
+                  </Text>
+                </View>
               )}
             </View>
           ))}
@@ -1027,7 +1164,7 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
                   <Text style={[
                     styles(theme).genderButtonText,
                     newChildGender === 'male' && styles(theme).genderButtonTextActive
-                  ]}>♂️ Garçon</Text>
+                ]}>♂️ Garçon</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[
@@ -1038,7 +1175,7 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
                   <Text style={[
                     styles(theme).genderButtonText,
                     newChildGender === 'female' && styles(theme).genderButtonTextActive
-                  ]}>♀️ Fille</Text>
+                ]}>♀️ Fille</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[
@@ -1063,6 +1200,34 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
                 numberOfLines={3}
                 textAlignVertical="top"
               />
+
+              <Text style={styles(theme).childFormLabel}>Cadeaux offerts</Text>
+              {newChildGifts.map((gift, idx) => (
+                <View key={idx} style={styles(theme).giftRow}>
+                  <Text style={styles(theme).giftItemText}>{gift}</Text>
+                  <TouchableOpacity onPress={() => setNewChildGifts(newChildGifts.filter((_, i) => i !== idx))}>
+                    <MaterialIcons name="close" size={18} color="#e53935" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              <View style={styles(theme).giftInputRow}>
+                <TextInput
+                  style={[styles(theme).childFormInput, {flex: 1, marginBottom: 0, marginRight: 8}]}
+                  placeholder="Ex: Lego, livre..."
+                  value={newGiftInput}
+                  onChangeText={setNewGiftInput}
+                />
+                <TouchableOpacity
+                  style={styles(theme).giftAddButton}
+                  onPress={() => {
+                    if (newGiftInput.trim()) {
+                      setNewChildGifts([...newChildGifts, newGiftInput.trim()]);
+                      setNewGiftInput('');
+                    }
+                  }}>
+                  <MaterialIcons name="add" size={22} color="#fff" />
+                </TouchableOpacity>
+              </View>
               
               <View style={styles(theme).childFormButtons}>
                 <TouchableOpacity
@@ -1101,7 +1266,7 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
                   <TouchableOpacity 
                     onPress={() => handleEditProf(prof)}
                     style={styles(theme).editChildButton}>
-                    <Text style={styles(theme).editChildText}>✏️</Text>
+                    <MaterialIcons name="edit" size={16} color={theme.primary} />
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => handleDeleteProf(prof.id)}>
                     <Text style={styles(theme).deleteChildText}>✕</Text>
@@ -1109,14 +1274,13 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
                 </View>
               </View>
               {prof.year && (
-                <Text style={styles(theme).childDetailText}>
-                  📅 {prof.year}
-                </Text>
+                <View style={styles(theme).childDetailRow}>
+                  <MaterialIcons name="event" size={13} color={theme.textSecondary} />
+                  <Text style={styles(theme).childDetailText}>{' '}{prof.year}</Text>
+                </View>
               )}
               {prof.notes && (
-                <Text style={styles(theme).childNotesText}>
-                  💬 {prof.notes}
-                </Text>
+                <Text style={styles(theme).childNotesText}>{prof.notes}</Text>
               )}
             </View>
           ))}
@@ -1185,78 +1349,284 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
           )}
         </View>
 
-        {/* Relations */}
+        {/* Famille */}
+        <View style={styles(theme).relationshipsSection}>
+          <Text style={styles(theme).sectionTitle}>Famille</Text>
+
+          {/* Contacts Goodfriends liés (types famille) */}
+          {relationships
+            .filter(relatedContact => {
+              const rel = contact.relationships?.find(r => r.contactId === relatedContact.id);
+              return rel && isFamilyRelationType(rel.relationType);
+            })
+            .map((relatedContact, index) => {
+              const relationship = contact.relationships?.find(r => r.contactId === relatedContact.id);
+              if (!relationship) return null;
+              return (
+                <View key={`fam-${relatedContact.id}-${index}`} style={styles(theme).relationshipCard}>
+                  <TouchableOpacity
+                    style={styles(theme).relationshipInfo}
+                    onPress={() => navigation.navigate('ContactDetail', {contactId: relatedContact.id})}>
+                    <Text style={styles(theme).relationshipLabel}>
+                      {getRelationLabel(relationship.relationType, relationship.customRelationLabel)}
+                    </Text>
+                    <Text style={styles(theme).relationshipName}>
+                      {relatedContact.firstName} {relatedContact.lastName}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => handleDeleteRelation(relatedContact.id)}
+                    style={styles(theme).deleteRelationButton}>
+                    <Text style={styles(theme).deleteRelationText}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+
+          {/* Membres famille hors-Goodfriends */}
+          {familyMembers.map(fm => (
+            <View key={fm.id} style={styles(theme).relationshipCard}>
+              <View style={styles(theme).relationshipInfo}>
+                <Text style={styles(theme).relationshipLabel}>
+                  {FAMILY_RELATION_LABELS[fm.relationType] || fm.relationType}
+                </Text>
+                <Text style={styles(theme).relationshipName}>
+                  {fm.firstName}{fm.lastName ? ` ${fm.lastName}` : ''}{fm.dateOfBirth ? `  ·  ${calcFMAge(fm.dateOfBirth)}` : ''}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => handleEditFamilyMember(fm)} style={{padding: 6}}>
+                <MaterialIcons name="edit" size={17} color={theme.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => handleDeleteFamilyMember(fm.id)} style={styles(theme).deleteRelationButton}>
+                <Text style={styles(theme).deleteRelationText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
+
+          {/* Formulaire ajout membre hors-GF */}
+          {showAddFamilyMemberForm ? (
+            <View style={styles(theme).addRelationForm}>
+              <Text style={styles(theme).addRelationFormTitle}>
+                {editingFamilyMemberId ? 'Modifier le membre' : 'Nouveau membre de la famille'}
+              </Text>
+
+              <Text style={styles(theme).relationFormLabel}>Prénom *</Text>
+              <TextInput
+                style={styles(theme).input}
+                placeholder="Prénom"
+                value={newFMFirstName}
+                onChangeText={setNewFMFirstName}
+              />
+
+              <Text style={styles(theme).relationFormLabel}>Nom (optionnel)</Text>
+              <TextInput
+                style={styles(theme).input}
+                placeholder="Nom de famille"
+                value={newFMLastName}
+                onChangeText={setNewFMLastName}
+              />
+
+              <Text style={styles(theme).relationFormLabel}>Type *</Text>
+              <TouchableOpacity
+                style={styles(theme).selectorButton}
+                onPress={() => setShowFMRelationTypeModal(true)}>
+                <Text style={styles(theme).selectorButtonText}>
+                  {FAMILY_RELATION_LABELS[newFMRelationType] || newFMRelationType}
+                </Text>
+                <MaterialIcons name="arrow-drop-down" size={22} color={theme.text} />
+              </TouchableOpacity>
+
+              <Text style={styles(theme).relationFormLabel}>Date de naissance (optionnel)</Text>
+              <TouchableOpacity
+                style={styles(theme).selectorButton}
+                onPress={() => setShowFMDatePicker(true)}>
+                <Text style={styles(theme).selectorButtonText}>
+                  {newFMDateOfBirth
+                    ? new Date(newFMDateOfBirth).toLocaleDateString('fr-FR')
+                    : 'Sélectionner une date'}
+                </Text>
+                <MaterialIcons name="calendar-today" size={18} color={theme.text} />
+              </TouchableOpacity>
+              {showFMDatePicker && (
+                <DateTimePicker
+                  value={newFMDateOfBirth ? new Date(newFMDateOfBirth) : new Date()}
+                  mode="date"
+                  display="default"
+                  maximumDate={new Date()}
+                  onChange={(_, date) => {
+                    setShowFMDatePicker(false);
+                    if (date) setNewFMDateOfBirth(date.toISOString());
+                  }}
+                />
+              )}
+
+              <Text style={styles(theme).relationFormLabel}>Sexe</Text>
+              <View style={{flexDirection: 'row', gap: 8, marginBottom: 10}}>
+                {(['female', 'male', 'other'] as const).map(g => (
+                  <TouchableOpacity
+                    key={g}
+                    style={[styles(theme).selectorButton, {flex: 1, justifyContent: 'center'},
+                      newFMGender === g && {backgroundColor: theme.primary}]}
+                    onPress={() => setNewFMGender(g)}>
+                    <Text style={[styles(theme).selectorButtonText,
+                      newFMGender === g && {color: '#fff'}]}>
+                      {g === 'female' ? 'Féminin' : g === 'male' ? 'Masculin' : 'Autre'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles(theme).relationFormLabel}>Notes (optionnel)</Text>
+              <TextInput
+                style={styles(theme).input}
+                placeholder="Notes…"
+                value={newFMNotes}
+                onChangeText={setNewFMNotes}
+              />
+
+              <View style={styles(theme).relationFormButtons}>
+                <TouchableOpacity style={styles(theme).relationFormSaveButton} onPress={handleAddFamilyMember}>
+                  <Text style={styles(theme).relationFormSaveText}>
+                    {editingFamilyMemberId ? 'Modifier' : 'Ajouter'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles(theme).relationFormCancelButton} onPress={resetFMForm}>
+                  <Text style={styles(theme).relationFormCancelText}>Annuler</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={{flexDirection: 'row', gap: 8}}>
+              <TouchableOpacity
+                style={[styles(theme).showAddRelationButton, {flex: 1}]}
+                onPress={() => {
+                  setContactPickerMode('family');
+                  setSelectedRelationType(RelationType.SIBLING);
+                  setShowAddRelationForm(true);
+                }}>
+                <Text style={styles(theme).showAddRelationButtonText}>+ Lier un proche Goodfriends</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles(theme).showAddRelationButton, {flex: 1}]}
+                onPress={() => {
+                  resetFMForm();
+                  setShowAddFamilyMemberForm(true);
+                }}>
+                <Text style={styles(theme).showAddRelationButtonText}>+ Ajouter (sans compte)</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* showAddRelationForm en mode famille */}
+          {showAddRelationForm && contactPickerMode === 'family' && (
+            <View style={styles(theme).addRelationForm}>
+              <Text style={styles(theme).addRelationFormTitle}>Lier un proche Goodfriends</Text>
+
+              <Text style={styles(theme).relationFormLabel}>Contact *</Text>
+              <TouchableOpacity
+                style={styles(theme).selectorButton}
+                onPress={() => setShowContactPickerModal2(true)}>
+                <Text style={styles(theme).selectorButtonText}>
+                  {selectedRelationContactId
+                    ? (availableContacts.find(c => c.id === selectedRelationContactId)
+                        ? `${availableContacts.find(c => c.id === selectedRelationContactId)!.firstName} ${availableContacts.find(c => c.id === selectedRelationContactId)!.lastName}`
+                        : 'Sélectionner un contact')
+                    : 'Sélectionner un contact'}
+                </Text>
+                <MaterialIcons name="arrow-drop-down" size={22} color={theme.text} />
+              </TouchableOpacity>
+
+              <Text style={styles(theme).relationFormLabel}>Type de relation *</Text>
+              <TouchableOpacity
+                style={styles(theme).selectorButton}
+                onPress={() => setShowRelationTypeModal(true)}>
+                <Text style={styles(theme).selectorButtonText}>
+                  {FAMILY_RELATION_LABELS[selectedRelationType] || selectedRelationType}
+                </Text>
+                <MaterialIcons name="arrow-drop-down" size={22} color={theme.text} />
+              </TouchableOpacity>
+
+              <View style={styles(theme).relationFormButtons}>
+                <TouchableOpacity style={styles(theme).relationFormSaveButton} onPress={handleAddRelation}>
+                  <Text style={styles(theme).relationFormSaveText}>Ajouter</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles(theme).relationFormCancelButton} onPress={() => {
+                  setShowAddRelationForm(false);
+                  setSelectedRelationContactId('');
+                  setSelectedRelationType(RelationType.SIBLING);
+                  setCustomRelationLabel('');
+                }}>
+                  <Text style={styles(theme).relationFormCancelText}>Annuler</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </View>
+
+        {/* Relations (sociales) */}
         <View style={styles(theme).relationshipsSection}>
           <Text style={styles(theme).sectionTitle}>Relations</Text>
-          {relationships.map((relatedContact, index) => {
-            const relationship = contact.relationships?.find(
-              r => r.contactId === relatedContact.id,
-            );
-            if (!relationship) return null;
-            return (
-              <View key={`${relatedContact.id}-${relationship.relationType}-${index}`} style={styles(theme).relationshipCard}>
-                <TouchableOpacity
-                  style={styles(theme).relationshipInfo}
-                  onPress={() => navigation.navigate('ContactDetail', {contactId: relatedContact.id})}>
-                  <Text style={styles(theme).relationshipLabel}>
-                    {getRelationLabel(relationship.relationType, relationship.customRelationLabel)}
-                  </Text>
-                  <Text style={styles(theme).relationshipName}>
-                    {relatedContact.firstName} {relatedContact.lastName}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  onPress={() => handleDeleteRelation(relatedContact.id)}
-                  style={styles(theme).deleteRelationButton}>
-                  <Text style={styles(theme).deleteRelationText}>✕</Text>
-                </TouchableOpacity>
-              </View>
-            );
-          })}
-          
-          {showAddRelationForm ? (
+
+          {relationships
+            .filter(relatedContact => {
+              const rel = contact.relationships?.find(r => r.contactId === relatedContact.id);
+              return rel && !isFamilyRelationType(rel.relationType);
+            })
+            .map((relatedContact, index) => {
+              const relationship = contact.relationships?.find(r => r.contactId === relatedContact.id);
+              if (!relationship) return null;
+              return (
+                <View key={`soc-${relatedContact.id}-${index}`} style={styles(theme).relationshipCard}>
+                  <TouchableOpacity
+                    style={styles(theme).relationshipInfo}
+                    onPress={() => navigation.navigate('ContactDetail', {contactId: relatedContact.id})}>
+                    <Text style={styles(theme).relationshipLabel}>
+                      {getRelationLabel(relationship.relationType, relationship.customRelationLabel)}
+                    </Text>
+                    <Text style={styles(theme).relationshipName}>
+                      {relatedContact.firstName} {relatedContact.lastName}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => handleDeleteRelation(relatedContact.id)}
+                    style={styles(theme).deleteRelationButton}>
+                    <Text style={styles(theme).deleteRelationText}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+
+          {showAddRelationForm && contactPickerMode === 'social' ? (
             <View style={styles(theme).addRelationForm}>
               <Text style={styles(theme).addRelationFormTitle}>Ajouter une relation</Text>
-              
+
               <Text style={styles(theme).relationFormLabel}>Contact *</Text>
-              <View style={styles(theme).pickerContainer}>
-                <Picker
-                  selectedValue={selectedRelationContactId}
-                  onValueChange={(itemValue) => setSelectedRelationContactId(itemValue)}
-                  style={styles(theme).picker}
-                  dropdownIconColor="#333">
-                  <Picker.Item label="Sélectionner un contact" value="" color="#333" />
-                  {availableContacts.map((c) => (
-                    <Picker.Item 
-                      key={c.id} 
-                      label={`${c.firstName} ${c.lastName}`} 
-                      value={c.id}
-                      color="#333" 
-                    />
-                  ))}
-                </Picker>
-              </View>
-              
+              <TouchableOpacity
+                style={styles(theme).selectorButton}
+                onPress={() => setShowContactPickerModal2(true)}>
+                <Text style={styles(theme).selectorButtonText}>
+                  {selectedRelationContactId
+                    ? (availableContacts.find(c => c.id === selectedRelationContactId)
+                        ? `${availableContacts.find(c => c.id === selectedRelationContactId)!.firstName} ${availableContacts.find(c => c.id === selectedRelationContactId)!.lastName}`
+                        : 'Sélectionner un contact')
+                    : 'Sélectionner un contact'}
+                </Text>
+                <MaterialIcons name="arrow-drop-down" size={22} color={theme.text} />
+              </TouchableOpacity>
+
               <Text style={styles(theme).relationFormLabel}>Type de relation *</Text>
-              <View style={styles(theme).pickerContainer}>
-                <Picker
-                  selectedValue={selectedRelationType}
-                  onValueChange={(itemValue) => setSelectedRelationType(itemValue as RelationType)}
-                  style={styles(theme).picker}
-                  dropdownIconColor="#333">
-                  <Picker.Item label="Ami(e)" value={RelationType.FRIEND} color="#333" />
-                  <Picker.Item label="Conjoint(e)" value={RelationType.SPOUSE} color="#333" />
-                  <Picker.Item label="Enfant" value={RelationType.CHILD} color="#333" />
-                  <Picker.Item label="Père" value={RelationType.FATHER} color="#333" />
-                  <Picker.Item label="Mère" value={RelationType.MOTHER} color="#333" />
-                  <Picker.Item label="Frère/Sœur" value={RelationType.SIBLING} color="#333" />
-                  <Picker.Item label="Cousin(e)" value={RelationType.COUSIN} color="#333" />
-                  <Picker.Item label="Belle-mère" value={RelationType.STEPMOTHER} color="#333" />
-                  <Picker.Item label="Beau-père" value={RelationType.STEPFATHER} color="#333" />
-                  <Picker.Item label="Collègue" value={RelationType.COLLEAGUE} color="#333" />
-                  <Picker.Item label="Autre (précisez ci-dessous)" value={RelationType.OTHER} color="#333" />
-                </Picker>
-              </View>
+              <TouchableOpacity
+                style={styles(theme).selectorButton}
+                onPress={() => setShowRelationTypeModal(true)}>
+                <Text style={styles(theme).selectorButtonText}>
+                  {({
+                    [RelationType.FRIEND]:    'Ami(e)',
+                    [RelationType.COLLEAGUE]: 'Collègue',
+                    [RelationType.OTHER]:     'Autre (précisez ci-dessous)',
+                  } as Record<string, string>)[selectedRelationType] || 'Ami(e)'}
+                </Text>
+                <MaterialIcons name="arrow-drop-down" size={22} color={theme.text} />
+              </TouchableOpacity>
 
               {selectedRelationType === RelationType.OTHER && (
                 <>
@@ -1269,32 +1639,32 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
                   />
                 </>
               )}
-              
+
               <View style={styles(theme).relationFormButtons}>
-                <TouchableOpacity
-                  style={styles(theme).relationFormSaveButton}
-                  onPress={handleAddRelation}>
+                <TouchableOpacity style={styles(theme).relationFormSaveButton} onPress={handleAddRelation}>
                   <Text style={styles(theme).relationFormSaveText}>Ajouter</Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles(theme).relationFormCancelButton}
-                  onPress={() => {
-                    setShowAddRelationForm(false);
-                    setSelectedRelationContactId('');
-                    setSelectedRelationType(RelationType.FRIEND);
-                    setCustomRelationLabel('');
-                  }}>
+                <TouchableOpacity style={styles(theme).relationFormCancelButton} onPress={() => {
+                  setShowAddRelationForm(false);
+                  setSelectedRelationContactId('');
+                  setSelectedRelationType(RelationType.FRIEND);
+                  setCustomRelationLabel('');
+                }}>
                   <Text style={styles(theme).relationFormCancelText}>Annuler</Text>
                 </TouchableOpacity>
               </View>
             </View>
-          ) : (
+          ) : !showAddRelationForm ? (
             <TouchableOpacity
               style={styles(theme).showAddRelationButton}
-              onPress={() => setShowAddRelationForm(true)}>
+              onPress={() => {
+                setContactPickerMode('social');
+                setSelectedRelationType(RelationType.FRIEND);
+                setShowAddRelationForm(true);
+              }}>
               <Text style={styles(theme).showAddRelationButtonText}>+ Ajouter une relation</Text>
             </TouchableOpacity>
-          )}
+          ) : null}
         </View>
 
         {/* Email */}
@@ -1320,18 +1690,16 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
 
         {/* Groupe */}
         <Text style={styles(theme).label}>Groupe</Text>
-        <View style={styles(theme).pickerContainer}>
-          <Picker
-            selectedValue={selectedGroupId}
-            onValueChange={(itemValue) => setSelectedGroupId(itemValue)}
-            style={styles(theme).picker}
-            dropdownIconColor="#666">
-            <Picker.Item label="Aucun groupe" value="" color="#666" />
-            {groups.map((group) => (
-              <Picker.Item key={group.id} label={group.name} value={group.id} color="#333" />
-            ))}
-          </Picker>
-        </View>
+        <TouchableOpacity
+          style={styles(theme).selectorButton}
+          onPress={() => setShowGroupPickerModal(true)}>
+          <Text style={styles(theme).selectorButtonText}>
+            {selectedGroupId
+              ? groups.find(g => g.id === selectedGroupId)?.name || 'Aucun groupe'
+              : 'Aucun groupe'}
+          </Text>
+          <MaterialIcons name="arrow-drop-down" size={22} color={theme.text} />
+        </TouchableOpacity>
 
         {/* Allergies */}
         <Text style={styles(theme).label}>Allergies</Text>
@@ -1347,7 +1715,8 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
           <Text style={styles(theme).sectionTitle}>Voyages en commun</Text>
           {travels.map((t, i) => (
             <View key={i} style={styles(theme).travelItem}>
-              <Text style={styles(theme).travelText}>✈️ {t}</Text>
+              <MaterialIcons name="flight" size={14} color={theme.textSecondary} />
+              <Text style={styles(theme).travelText}>{' '}{t}</Text>
               <TouchableOpacity onPress={() => setTravels(travels.filter((_, j) => j !== i))}>
                 <Text style={styles(theme).deleteChildText}>✕</Text>
               </TouchableOpacity>
@@ -1391,44 +1760,12 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
           {photoUri ? (
             <Image source={{uri: photoUri}} style={styles(theme).photoPreview} />
           ) : (
-            <Text style={styles(theme).photoButtonText}>📷 Ajouter une photo</Text>
+            <View style={{flexDirection:'row', alignItems:'center', gap:8}}>
+              <MaterialIcons name="photo-camera" size={22} color={theme.primary} />
+              <Text style={styles(theme).photoButtonText}>Ajouter une photo</Text>
+            </View>
           )}
         </TouchableOpacity>
-
-        {/* Compte GoodFriends */}
-        {!contact?.goodfriendsUserId && hasGoodFriendsAccount && (
-          <View style={styles(theme).goodfriendsCard}>
-            <Text style={styles(theme).goodfriendsCardTitle}>
-              ✨ Ce contact a un compte GoodFriends !
-            </Text>
-            {friendRequestStatus === 'accepted' ? (
-              <Text style={styles(theme).goodfriendsCardText}>
-                ✅ Vous êtes déjà amis sur GoodFriends.
-              </Text>
-            ) : friendRequestStatus === 'pending' ? (
-              <Text style={styles(theme).goodfriendsCardText}>
-                ⏳ Demande d'ami déjà envoyée, en attente de réponse.
-              </Text>
-            ) : (
-              <>
-                <Text style={styles(theme).goodfriendsCardText}>
-                  Vous pouvez l'ajouter en ami pour partager vos informations et vous envoyer des messages !
-                </Text>
-                <TouchableOpacity
-                  style={[
-                    styles(theme).addFriendButton,
-                    friendRequestStatus === 'sending' && styles(theme).addFriendButtonDisabled,
-                  ]}
-                  onPress={handleAddFriend}
-                  disabled={friendRequestStatus === 'sending'}>
-                  <Text style={styles(theme).addFriendButtonText}>
-                    {friendRequestStatus === 'sending' ? 'Envoi en cours...' : "Envoyer une demande d'ami"}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        )}
 
         <View style={styles(theme).buttonContainer}>
           <TouchableOpacity
@@ -1452,6 +1789,7 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
       <Modal
         animationType="slide"
         transparent={true}
+        statusBarTranslucent={true}
         visible={messageModalVisible}
         onRequestClose={() => setMessageModalVisible(false)}>
         <View style={styles(theme).modalOverlay}>
@@ -1500,14 +1838,14 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
                   <TouchableOpacity
                     style={styles(theme).sendOptionButton}
                     onPress={handleSendSMS}>
-                    <Text style={styles(theme).sendOptionIcon}>💬</Text>
+                    <MaterialIcons name="sms" size={32} color={theme.primary} />
                     <Text style={styles(theme).sendOptionText}>SMS</Text>
                   </TouchableOpacity>
                   
                   <TouchableOpacity
                     style={styles(theme).sendOptionButton}
                     onPress={handleSendWhatsApp}>
-                    <Text style={styles(theme).sendOptionIcon}>📱</Text>
+                    <MaterialIcons name="phone" size={32} color={theme.primary} />
                     <Text style={styles(theme).sendOptionText}>WhatsApp</Text>
                   </TouchableOpacity>
                 </>
@@ -1517,7 +1855,7 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
                 <TouchableOpacity
                   style={styles(theme).sendOptionButton}
                   onPress={handleSendEmail}>
-                  <Text style={styles(theme).sendOptionIcon}>📧</Text>
+                  <MaterialIcons name="email" size={32} color={theme.primary} />
                   <Text style={styles(theme).sendOptionText}>Email</Text>
                 </TouchableOpacity>
               )}
@@ -1532,6 +1870,223 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
         </View>
       </Modal>
 
+      {/* Modal Sélectionner Contact pour relation */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        statusBarTranslucent={true}
+        visible={showContactPickerModal2}
+        onRequestClose={() => { setShowContactPickerModal2(false); setContactSearchQuery(''); }}>
+        <View style={styles(theme).modalOverlay}>
+          <View style={styles(theme).modalContainer}>
+            <Text style={styles(theme).modalTitle}>Sélectionner un contact</Text>
+            <TextInput
+              style={[styles(theme).input, {marginBottom: 8}]}
+              placeholder="Rechercher…"
+              placeholderTextColor={theme.secondary}
+              value={contactSearchQuery}
+              onChangeText={setContactSearchQuery}
+              autoFocus
+            />
+            <ScrollView style={{maxHeight: 280}}>
+              {availableContacts
+                .filter(c =>
+                  contactSearchQuery === '' ||
+                  `${c.firstName} ${c.lastName}`.toLowerCase().includes(contactSearchQuery.toLowerCase())
+                )
+                .map(c => (
+                <TouchableOpacity
+                  key={c.id}
+                  style={[
+                    styles(theme).pickerOption,
+                    selectedRelationContactId === c.id && styles(theme).pickerOptionSelected,
+                  ]}
+                  onPress={() => {
+                    setSelectedRelationContactId(c.id);
+                    setContactSearchQuery('');
+                    setShowContactPickerModal2(false);
+                  }}>
+                  <Text style={[
+                    styles(theme).pickerOptionText,
+                    selectedRelationContactId === c.id && styles(theme).pickerOptionTextSelected,
+                  ]}>
+                    {c.firstName} {c.lastName}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles(theme).closeModalButton}
+              onPress={() => { setShowContactPickerModal2(false); setContactSearchQuery(''); }}>
+              <Text style={styles(theme).closeModalButtonText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal Sélectionner Type de relation */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        statusBarTranslucent={true}
+        visible={showRelationTypeModal}
+        onRequestClose={() => setShowRelationTypeModal(false)}>
+        <View style={styles(theme).modalOverlay}>
+          <View style={styles(theme).modalContainer}>
+            <Text style={styles(theme).modalTitle}>Type de relation</Text>
+            <ScrollView style={{maxHeight: 320}}>
+              {(contactPickerMode === 'family'
+                ? [
+                    {value: RelationType.SIBLING,     label: 'Frère/Sœur'},
+                    {value: RelationType.SPOUSE,      label: 'Conjoint(e)'},
+                    {value: RelationType.CHILD,       label: 'Enfant'},
+                    {value: RelationType.FATHER,      label: 'Père'},
+                    {value: RelationType.MOTHER,      label: 'Mère'},
+                    {value: RelationType.PARENT,      label: 'Parent'},
+                    {value: RelationType.COUSIN,      label: 'Cousin(e)'},
+                    {value: RelationType.STEPMOTHER,  label: 'Belle-mère'},
+                    {value: RelationType.STEPFATHER,  label: 'Beau-père'},
+                  ]
+                : [
+                    {value: RelationType.FRIEND,    label: 'Ami(e)'},
+                    {value: RelationType.COLLEAGUE, label: 'Collègue'},
+                    {value: RelationType.OTHER,     label: 'Autre (précisez ci-dessous)'},
+                  ]
+              ).map(item => (
+                <TouchableOpacity
+                  key={item.value}
+                  style={[
+                    styles(theme).pickerOption,
+                    selectedRelationType === item.value && styles(theme).pickerOptionSelected,
+                  ]}
+                  onPress={() => {
+                    setSelectedRelationType(item.value);
+                    setShowRelationTypeModal(false);
+                  }}>
+                  <Text style={[
+                    styles(theme).pickerOptionText,
+                    selectedRelationType === item.value && styles(theme).pickerOptionTextSelected,
+                  ]}>
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles(theme).closeModalButton}
+              onPress={() => setShowRelationTypeModal(false)}>
+              <Text style={styles(theme).closeModalButtonText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal type relation pour membre famille hors-GF */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        statusBarTranslucent={true}
+        visible={showFMRelationTypeModal}
+        onRequestClose={() => setShowFMRelationTypeModal(false)}>
+        <View style={styles(theme).modalOverlay}>
+          <View style={styles(theme).modalContainer}>
+            <Text style={styles(theme).modalTitle}>Type de lien familial</Text>
+            <ScrollView style={{maxHeight: 320}}>
+              {[
+                {value: RelationType.SIBLING,    label: 'Frère/Sœur'},
+                {value: RelationType.SPOUSE,     label: 'Conjoint(e)'},
+                {value: RelationType.CHILD,      label: 'Enfant'},
+                {value: RelationType.FATHER,     label: 'Père'},
+                {value: RelationType.MOTHER,     label: 'Mère'},
+                {value: RelationType.PARENT,     label: 'Parent'},
+                {value: RelationType.COUSIN,     label: 'Cousin(e)'},
+                {value: RelationType.STEPMOTHER, label: 'Belle-mère'},
+                {value: RelationType.STEPFATHER, label: 'Beau-père'},
+              ].map(item => (
+                <TouchableOpacity
+                  key={item.value}
+                  style={[
+                    styles(theme).pickerOption,
+                    newFMRelationType === item.value && styles(theme).pickerOptionSelected,
+                  ]}
+                  onPress={() => {
+                    setNewFMRelationType(item.value);
+                    setShowFMRelationTypeModal(false);
+                  }}>
+                  <Text style={[
+                    styles(theme).pickerOptionText,
+                    newFMRelationType === item.value && styles(theme).pickerOptionTextSelected,
+                  ]}>
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles(theme).closeModalButton}
+              onPress={() => setShowFMRelationTypeModal(false)}>
+              <Text style={styles(theme).closeModalButtonText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal Sélectionner Groupe */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        statusBarTranslucent={true}
+        visible={showGroupPickerModal}
+        onRequestClose={() => setShowGroupPickerModal(false)}>
+        <View style={styles(theme).modalOverlay}>
+          <View style={styles(theme).modalContainer}>
+            <Text style={styles(theme).modalTitle}>Sélectionner un groupe</Text>
+            <ScrollView style={{maxHeight: 320}}>
+              <TouchableOpacity
+                style={[
+                  styles(theme).pickerOption,
+                  !selectedGroupId && styles(theme).pickerOptionSelected,
+                ]}
+                onPress={() => {
+                  setSelectedGroupId('');
+                  setShowGroupPickerModal(false);
+                }}>
+                <Text style={[
+                  styles(theme).pickerOptionText,
+                  !selectedGroupId && styles(theme).pickerOptionTextSelected,
+                ]}>
+                  Aucun groupe
+                </Text>
+              </TouchableOpacity>
+              {groups.map(group => (
+                <TouchableOpacity
+                  key={group.id}
+                  style={[
+                    styles(theme).pickerOption,
+                    selectedGroupId === group.id && styles(theme).pickerOptionSelected,
+                  ]}
+                  onPress={() => {
+                    setSelectedGroupId(group.id);
+                    setShowGroupPickerModal(false);
+                  }}>
+                  <Text style={[
+                    styles(theme).pickerOptionText,
+                    selectedGroupId === group.id && styles(theme).pickerOptionTextSelected,
+                  ]}>
+                    {group.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles(theme).closeModalButton}
+              onPress={() => setShowGroupPickerModal(false)}>
+              <Text style={styles(theme).closeModalButtonText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
     </ScrollView>
 
     {saveSuccessVisible && (
@@ -1539,7 +2094,8 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
         style={[styles(theme).successToastOverlay, {transform: [{translateY: toastAnim}]}]}
         pointerEvents="none">
         <View style={styles(theme).successToastCard}>
-          <Text style={styles(theme).successToastText}>✅  Contact mis à jour avec succès</Text>
+          <MaterialIcons name="check-circle" size={18} color="#fff" />
+          <Text style={styles(theme).successToastText}> Contact mis à jour avec succès</Text>
         </View>
       </Animated.View>
     )}
@@ -2316,6 +2872,82 @@ const styles = (theme: any) => StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  selectorButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: theme.border || '#ddd',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    backgroundColor: theme.cardBackground || '#fff',
+    marginBottom: 12,
+  },
+  selectorButtonText: {
+    flex: 1,
+    fontSize: 15,
+    color: theme.text,
+  },
+  pickerOption: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.border || '#eee',
+  },
+  pickerOptionSelected: {
+    backgroundColor: theme.primary + '22',
+  },
+  pickerOptionText: {
+    fontSize: 15,
+    color: theme.text,
+  },
+  pickerOptionTextSelected: {
+    color: theme.primary,
+    fontWeight: '700',
+  },
+  detachChildButton: {
+    marginHorizontal: 4,
+    padding: 4,
+  },
+  childDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  giftsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  giftRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    backgroundColor: theme.cardBackground || '#f5f5f5',
+    borderRadius: 6,
+    marginBottom: 4,
+  },
+  giftItemText: {
+    flex: 1,
+    fontSize: 14,
+    color: theme.text,
+    marginRight: 8,
+  },
+  giftInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  giftAddButton: {
+    backgroundColor: theme.primary,
+    borderRadius: 8,
+    padding: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
 

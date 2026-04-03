@@ -1,4 +1,4 @@
-import React, {useState, useEffect} from 'react';
+import React, {useState, useEffect, useRef} from 'react';
 import {
   View,
   Text,
@@ -10,8 +10,12 @@ import {
   Linking,
   Alert,
   Platform,
+  Animated,
+  Dimensions,
 } from 'react-native';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
+import {Neutral, Spacing, Radius, Shadow, Typography, Semantic} from '../theme/designSystem';
 import StorageService from '../services/StorageService';
 import {Contact, Child} from '../types';
 
@@ -31,6 +35,20 @@ interface BirthdaysScreenProps {
   navigation: any;
 }
 
+const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT} = Dimensions.get('window');
+const CONFETTI_COLORS = ['#f72585', '#3a86ff', '#06d6a0', '#ffd166', '#ff9f1c', '#7209b7', '#ef476f', '#118ab2'];
+const CONFETTI_COUNT = 24;
+const CONFETTI_DATA = Array.from({length: CONFETTI_COUNT}, (_, i) => ({
+  id: i,
+  startX: ((i * 71 + 13) % 90) + 5,
+  drift: ((i * 43) % 80) - 40,
+  delay: (i * 220) % 2800,
+  duration: 3000 + (i * 280) % 2000,
+  color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+  size: 6 + (i % 8),
+  isRect: i % 3 !== 0,
+}));
+
 const BirthdaysScreen: React.FC<BirthdaysScreenProps> = ({navigation}) => {
   const {theme} = useTheme();
   const [birthdays, setBirthdays] = useState<BirthdayItem[]>([]);
@@ -38,7 +56,15 @@ const BirthdaysScreen: React.FC<BirthdaysScreenProps> = ({navigation}) => {
   const [selectedBirthday, setSelectedBirthday] = useState<BirthdayItem | null>(null);
   const [selectedMessageIndex, setSelectedMessageIndex] = useState(0);
   const [customMessage, setCustomMessage] = useState('');
-  
+
+  const confettiAnims = useRef(
+    CONFETTI_DATA.map(() => ({
+      y: new Animated.Value(-30),
+      x: new Animated.Value(0),
+      rot: new Animated.Value(0),
+    }))
+  ).current;
+
   const defaultMessages = [
     "Joyeux anniversaire ! 🎉🎂 Je te souhaite une merveilleuse journée remplie de bonheur et de moments inoubliables !",
     "Bon anniversaire ! 🎈🎁 Que cette nouvelle année t'apporte joie, santé et réussite dans tous tes projets !",
@@ -47,12 +73,27 @@ const BirthdaysScreen: React.FC<BirthdaysScreenProps> = ({navigation}) => {
 
   useEffect(() => {
     loadBirthdays();
-    
     const unsubscribe = navigation.addListener('focus', () => {
       loadBirthdays();
     });
-    
     return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    CONFETTI_DATA.forEach((piece, i) => {
+      const anim = confettiAnims[i];
+      const run = () => {
+        anim.y.setValue(-30);
+        anim.x.setValue(0);
+        anim.rot.setValue(0);
+        Animated.parallel([
+          Animated.timing(anim.y, {toValue: SCREEN_HEIGHT + 30, duration: piece.duration, delay: piece.delay, useNativeDriver: true}),
+          Animated.timing(anim.x, {toValue: piece.drift, duration: piece.duration, delay: piece.delay, useNativeDriver: true}),
+          Animated.timing(anim.rot, {toValue: 1, duration: piece.duration, delay: piece.delay, useNativeDriver: true}),
+        ]).start(({finished}) => { if (finished) run(); });
+      };
+      run();
+    });
   }, []);
 
   const calculateDaysUntilBirthday = (dateOfBirth: Date): number => {
@@ -317,16 +358,44 @@ const BirthdaysScreen: React.FC<BirthdaysScreenProps> = ({navigation}) => {
 
   return (
     <View style={styles(theme).container}>
+      {/* ── Confetti de fête ── */}
+      <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
+        {CONFETTI_DATA.map((piece, i) => {
+          const anim = confettiAnims[i];
+          const rotate = anim.rot.interpolate({inputRange: [0, 1], outputRange: ['0deg', '540deg']});
+          return (
+            <Animated.View
+              key={piece.id}
+              style={{
+                position: 'absolute',
+                left: piece.startX * SCREEN_WIDTH / 100,
+                top: 0,
+                width: piece.isRect ? piece.size * 2.2 : piece.size,
+                height: piece.isRect ? piece.size * 0.55 : piece.size,
+                borderRadius: piece.isRect ? 2 : piece.size / 2,
+                backgroundColor: piece.color,
+                opacity: 0.8,
+                transform: [{translateY: anim.y}, {translateX: anim.x}, {rotate}],
+              }}
+            />
+          );
+        })}
+      </View>
+
       <View style={styles(theme).header}>
         <View style={styles(theme).headerRow}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-            <Text style={styles(theme).backButtonText}>←</Text>
+            <View style={styles(theme).backBtnCircle}>
+              <MaterialIcons name="arrow-back" size={22} color="#383830" />
+            </View>
           </TouchableOpacity>
-          <Text style={styles(theme).headerTitle}>Anniversaires</Text>
+          <View>
+            <Text style={styles(theme).headerTitle}>Anniversaires 🎂</Text>
+            <Text style={styles(theme).headerSubtitle}>
+              {birthdays.length} anniversaire{birthdays.length > 1 ? 's' : ''} à venir
+            </Text>
+          </View>
         </View>
-        <Text style={styles(theme).headerSubtitle}>
-          {birthdays.length} anniversaire{birthdays.length > 1 ? 's' : ''} à venir
-        </Text>
       </View>
 
       {birthdays.length === 0 ? (
@@ -430,70 +499,71 @@ const BirthdaysScreen: React.FC<BirthdaysScreenProps> = ({navigation}) => {
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fcf9f0',
   },
   header: {
-    backgroundColor: theme.primary,
-    padding: 20,
-    paddingTop: 40,
-    paddingBottom: 30,
+    backgroundColor: 'transparent',
+    paddingHorizontal: Spacing.xl,
+    paddingTop: 48,
+    paddingBottom: 16,
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 5,
+    gap: 12,
   },
   backButton: {
-    marginRight: 15,
-    padding: 5,
+    padding: 0,
   },
-  backButtonText: {
-    fontSize: 28,
-    color: '#fff',
-    fontWeight: 'bold',
+  backBtnCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 5,
+    ...Typography.title,
+    color: '#383830',
+    fontSize: 20,
   },
   headerSubtitle: {
-    fontSize: 14,
-    color: '#E3F2FD',
+    ...Typography.bodySm,
+    color: '#65655c',
+    marginTop: 2,
   },
   list: {
-    padding: 15,
+    padding: Spacing.base,
+    paddingBottom: Spacing.xxxl,
   },
   birthdayCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 15,
-    marginBottom: 12,
+    backgroundColor: Neutral[0],
+    borderRadius: Radius.lg,
+    padding: Spacing.base,
+    marginBottom: Spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    ...Shadow.sm,
   },
   todayCard: {
-    backgroundColor: '#FFF9C4',
-    borderWidth: 2,
+    backgroundColor: '#FFFDE7',
+    borderWidth: 1.5,
     borderColor: '#FFC107',
   },
   soonCard: {
-    backgroundColor: '#E3F2FD',
+    backgroundColor: '#F0F7FF',
+    borderWidth: 1,
+    borderColor: Neutral[200],
   },
   birthdayIcon: {
     width: 50,
     height: 50,
     borderRadius: 25,
-    backgroundColor: '#f0f0f0',
+    backgroundColor: Neutral[100],
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 15,
+    marginRight: Spacing.md,
   },
   iconText: {
     fontSize: 28,
@@ -502,41 +572,48 @@ const styles = (theme: any) => StyleSheet.create({
     flex: 1,
   },
   birthdayName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 4,
+    ...Typography.titleSm,
+    color: Neutral[800],
+    marginBottom: 3,
   },
   parentInfo: {
-    fontSize: 12,
-    color: '#666',
-    marginBottom: 4,
+    ...Typography.bodySm,
+    color: Neutral[500],
+    marginBottom: 3,
   },
   dateRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   birthdayDate: {
-    fontSize: 14,
-    color: '#666',
-    marginRight: 10,
+    ...Typography.bodyMd,
+    color: Neutral[600],
+    marginRight: Spacing.sm,
   },
   ageText: {
-    fontSize: 13,
-    color: '#999',
+    ...Typography.label,
+    color: Neutral[400],
+    backgroundColor: Neutral[100],
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: Radius.full,
   },
   daysContainer: {
     alignItems: 'flex-end',
+    marginRight: Spacing.sm,
   },
   daysText: {
-    fontSize: 13,
+    ...Typography.label,
     fontWeight: '600',
-    color: '#666',
+    color: Neutral[600],
+    backgroundColor: Neutral[100],
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: Radius.full,
   },
   todayText: {
-    color: '#F57C00',
-    fontSize: 14,
-    fontWeight: 'bold',
+    color: '#E65100',
+    backgroundColor: '#FFF3E0',
   },
   actionButtons: {
     flexDirection: 'row',
@@ -544,155 +621,148 @@ const styles = (theme: any) => StyleSheet.create({
     gap: 8,
   },
   calendarButton: {
-    backgroundColor: '#4CAF50',
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    backgroundColor: Semantic.success,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 3,
+    ...Shadow.sm,
   },
   calendarButtonText: {
-    fontSize: 20,
+    fontSize: 18,
+  },
+  sendMessageButton: {
+    backgroundColor: theme.primary,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...Shadow.sm,
+  },
+  sendMessageButtonText: {
+    fontSize: 16,
+    color: '#fff',
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 40,
+    padding: Spacing.xxxl,
+    marginTop: Spacing.xxxl,
   },
   emptyIcon: {
-    fontSize: 80,
-    marginBottom: 20,
+    fontSize: 72,
+    marginBottom: Spacing.xl,
   },
   emptyText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
+    ...Typography.titleMd,
+    color: Neutral[700],
+    marginBottom: Spacing.sm,
   },
   emptySubtext: {
-    fontSize: 14,
-    color: '#666',
+    ...Typography.body,
+    color: Neutral[500],
     textAlign: 'center',
-  },
-  sendMessageButton: {
-    backgroundColor: theme.primary,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  sendMessageButtonText: {
-    fontSize: 18,
-    color: '#fff',
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.50)',
+    justifyContent: 'flex-end',
   },
   modalContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 20,
-    width: '90%',
-    maxHeight: '80%',
+    backgroundColor: Neutral[0],
+    borderTopLeftRadius: Radius.xxl,
+    borderTopRightRadius: Radius.xxl,
+    padding: Spacing.xl,
+    maxHeight: '85%',
   },
   modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 20,
+    ...Typography.titleMd,
+    color: Neutral[900],
+    marginBottom: Spacing.xl,
     textAlign: 'center',
   },
   modalLabel: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#666',
-    marginTop: 15,
-    marginBottom: 10,
+    ...Typography.label,
+    color: Neutral[500],
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginTop: Spacing.base,
+    marginBottom: Spacing.sm,
   },
   messageButtons: {
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 10,
+    marginBottom: 4,
   },
   messageOptionButton: {
     flex: 1,
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#ddd',
-    backgroundColor: '#fff',
+    paddingVertical: 10,
+    borderRadius: Radius.sm,
+    borderWidth: 1.5,
+    borderColor: Neutral[200],
+    backgroundColor: Neutral[0],
     alignItems: 'center',
   },
   messageOptionButtonActive: {
     borderColor: theme.primary,
-    backgroundColor: '#E3F2FD',
+    backgroundColor: theme.background,
   },
   messageOptionText: {
-    fontSize: 14,
-    color: '#666',
-    fontWeight: '600',
+    ...Typography.label,
+    color: Neutral[600],
   },
   messageOptionTextActive: {
     color: theme.primary,
+    fontWeight: '600',
   },
   messageInput: {
-    backgroundColor: '#f5f5f5',
-    borderRadius: 10,
-    padding: 12,
-    fontSize: 15,
-    color: '#333',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    minHeight: 100,
+    backgroundColor: Neutral[50],
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    ...Typography.body,
+    color: Neutral[800],
+    borderWidth: 1.5,
+    borderColor: Neutral[200],
+    minHeight: 90,
     textAlignVertical: 'top',
   },
   sendOptions: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    marginTop: 10,
-    marginBottom: 20,
+    marginTop: Spacing.md,
+    marginBottom: Spacing.lg,
   },
   sendOptionButton: {
     alignItems: 'center',
-    padding: 15,
-    borderRadius: 12,
-    backgroundColor: '#f5f5f5',
-    minWidth: 90,
+    padding: Spacing.base,
+    borderRadius: Radius.md,
+    backgroundColor: Neutral[50],
+    minWidth: 88,
+    borderWidth: 1,
+    borderColor: Neutral[200],
   },
   sendOptionIcon: {
-    fontSize: 32,
-    marginBottom: 8,
+    fontSize: 28,
+    marginBottom: 6,
   },
   sendOptionText: {
-    fontSize: 13,
-    color: '#333',
+    ...Typography.label,
+    color: Neutral[700],
     fontWeight: '600',
   },
   closeModalButton: {
-    backgroundColor: '#999',
-    padding: 15,
-    borderRadius: 10,
+    backgroundColor: Neutral[100],
+    borderRadius: Radius.md,
+    height: 48,
+    justifyContent: 'center',
     alignItems: 'center',
   },
   closeModalButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
+    ...Typography.titleSm,
+    color: Neutral[600],
   },
 });
 

@@ -10,9 +10,13 @@ import {
   RefreshControl,
   ScrollView,
 } from 'react-native';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
+import {Neutral, Spacing, Radius, Shadow, Typography, Semantic} from '../theme/designSystem';
 import FriendRequestService, {FriendRequest, GoodFriendsUser} from '../services/FriendRequestService';
 import StorageService from '../services/StorageService';
+import OnlineStatusService from '../services/OnlineStatusService';
+import OnlineIndicator from '../components/OnlineIndicator';
 import {Contact} from '../types';
 
 interface MyFriendsScreenProps {
@@ -26,6 +30,7 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
   const [acceptedFriends, setAcceptedFriends] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'received' | 'sent' | 'friends'>('received');
+  const [onlineStatuses, setOnlineStatuses] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     loadData();
@@ -74,6 +79,10 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
       // Filtrer uniquement les contacts qui sont des utilisateurs GoodFriends (ont un goodfriendsUserId)
       const goodFriendsContacts = contacts.filter(c => c.goodfriendsUserId);
       setAcceptedFriends(goodFriendsContacts);
+      const ids = goodFriendsContacts.map(c => c.goodfriendsUserId as string);
+      if (ids.length > 0) {
+        OnlineStatusService.getStatuses(ids).then(setOnlineStatuses);
+      }
     } catch (error) {
       console.error('Error loading friends:', error);
     }
@@ -194,17 +203,22 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
   const renderFriend = ({item}: {item: Contact}) => (
     <TouchableOpacity
       style={styles(theme).requestCard}
-      onPress={() => navigation.navigate('ContactDetail', {contactId: item.id})}>
+      onPress={() => navigation.navigate('ContactProfile', {contactId: item.id})}>
       <View style={styles(theme).requestInfo}>
-        {item.photo ? (
-          <Image source={{uri: item.photo}} style={styles(theme).avatar} />
-        ) : (
-          <View style={[styles(theme).avatar, styles(theme).avatarPlaceholder]}>
-            <Text style={styles(theme).avatarText}>
-              {item.firstName?.charAt(0)}{item.lastName?.charAt(0)}
-            </Text>
-          </View>
-        )}
+        <View style={{position: 'relative'}}>
+          {item.photo ? (
+            <Image source={{uri: item.photo}} style={styles(theme).avatar} />
+          ) : (
+            <View style={[styles(theme).avatar, styles(theme).avatarPlaceholder]}>
+              <Text style={styles(theme).avatarText}>
+                {item.firstName?.charAt(0)}{item.lastName?.charAt(0)}
+              </Text>
+            </View>
+          )}
+          {item.goodfriendsUserId ? (
+            <OnlineIndicator isOnline={onlineStatuses[item.goodfriendsUserId] ?? false} size={13} />
+          ) : null}
+        </View>
         <View style={styles(theme).requestDetails}>
           <Text style={styles(theme).requestName}>
             {item.firstName} {item.lastName}
@@ -224,13 +238,15 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
       <View style={styles(theme).header}>
         <View style={styles(theme).headerRow}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-            <Text style={styles(theme).backButtonText}>←</Text>
+            <View style={styles(theme).backBtnCircle}>
+              <MaterialIcons name="arrow-back" size={22} color="#383830" />
+            </View>
           </TouchableOpacity>
-          <Text style={styles(theme).headerTitle}>Mes amis GoodFriends</Text>
+          <View>
+            <Text style={styles(theme).headerTitle}>Mes amis GoodFriends</Text>
+            <Text style={styles(theme).headerSubtitle}>Gérez vos connexions et demandes d’amis</Text>
+          </View>
         </View>
-        <Text style={styles(theme).headerSubtitle}>
-          Gérez vos connexions et demandes d'amis
-        </Text>
       </View>
 
       <View style={styles(theme).tabContainer}>
@@ -341,86 +357,87 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fcf9f0',
   },
   header: {
-    backgroundColor: theme.primary,
-    padding: 20,
-    paddingTop: 40,
-    paddingBottom: 30,
+    backgroundColor: '#fcf9f0',
+    paddingHorizontal: Spacing.xl,
+    paddingTop: 48,
+    paddingBottom: 16,
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 5,
+    gap: 12,
   },
   backButton: {
-    marginRight: 15,
-    padding: 5,
+    padding: 0,
   },
-  backButtonText: {
-    fontSize: 28,
-    color: '#fff',
-    fontWeight: 'bold',
+  backBtnCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
+    ...Typography.title,
+    color: '#383830',
+    fontSize: 20,
   },
   headerSubtitle: {
-    fontSize: 14,
-    color: '#E3F2FD',
-    marginTop: 5,
+    ...Typography.bodySm,
+    color: '#65655c',
+    marginTop: 2,
   },
   tabContainer: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
+    backgroundColor: Neutral[0],
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    borderBottomColor: Neutral[100],
+    marginTop: 2,
   },
   tab: {
     flex: 1,
-    paddingVertical: 15,
+    paddingVertical: Spacing.md,
     alignItems: 'center',
-    borderBottomWidth: 2,
+    borderBottomWidth: 2.5,
     borderBottomColor: 'transparent',
   },
   activeTab: {
     borderBottomColor: theme.primary,
   },
   tabText: {
-    fontSize: 14,
+    ...Typography.label,
     fontWeight: '600',
-    color: '#666',
+    color: Neutral[500],
   },
   activeTabText: {
     color: theme.primary,
+    fontWeight: '700',
   },
   listContent: {
-    padding: 15,
+    padding: Spacing.base,
+    paddingBottom: Spacing.xxxl,
   },
   requestCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 15,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    backgroundColor: Neutral[0],
+    borderRadius: Radius.lg,
+    padding: Spacing.base,
+    marginBottom: Spacing.md,
+    ...Shadow.sm,
   },
   requestInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: Spacing.md,
   },
   avatar: {
     width: 50,
     height: 50,
     borderRadius: 25,
-    marginRight: 12,
+    marginRight: Spacing.md,
   },
   avatarPlaceholder: {
     backgroundColor: theme.primary,
@@ -428,27 +445,25 @@ const styles = (theme: any) => StyleSheet.create({
     alignItems: 'center',
   },
   avatarText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
+    color: '#FFF',
+    ...Typography.titleMd,
   },
   requestDetails: {
     flex: 1,
   },
   requestName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 2,
+    ...Typography.titleSm,
+    color: Neutral[800],
+    marginBottom: 3,
   },
   requestEmail: {
-    fontSize: 13,
-    color: '#666',
+    ...Typography.bodySm,
+    color: Neutral[600],
     marginBottom: 2,
   },
   requestPhone: {
-    fontSize: 12,
-    color: '#999',
+    ...Typography.bodySm,
+    color: Neutral[400],
   },
   requestActions: {
     flexDirection: 'row',
@@ -456,64 +471,63 @@ const styles = (theme: any) => StyleSheet.create({
   },
   acceptButton: {
     flex: 1,
-    backgroundColor: '#4CAF50',
-    paddingVertical: 10,
-    borderRadius: 8,
+    backgroundColor: Semantic.success,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.sm,
     alignItems: 'center',
   },
   acceptButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 'bold',
+    color: '#FFF',
+    ...Typography.label,
+    fontWeight: '700',
   },
   rejectButton: {
     flex: 1,
-    backgroundColor: '#f44336',
-    paddingVertical: 10,
-    borderRadius: 8,
+    backgroundColor: Semantic.error,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.sm,
     alignItems: 'center',
   },
   rejectButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 'bold',
+    color: '#FFF',
+    ...Typography.label,
+    fontWeight: '700',
   },
   pendingBadge: {
-    backgroundColor: '#FF9800',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
+    backgroundColor: Semantic.warning,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 5,
+    borderRadius: Radius.full,
     alignSelf: 'flex-start',
   },
   pendingText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: 'bold',
+    color: '#FFF',
+    ...Typography.label,
+    fontWeight: '700',
   },
   chevron: {
-    fontSize: 24,
-    color: '#ccc',
+    fontSize: 22,
+    color: Neutral[300],
     alignSelf: 'center',
   },
   emptyContainer: {
     alignItems: 'center',
-    paddingTop: 60,
+    paddingTop: Spacing.xxxl,
   },
   emptyIcon: {
     fontSize: 64,
-    marginBottom: 15,
+    marginBottom: Spacing.lg,
   },
   emptyText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#666',
-    marginBottom: 5,
+    ...Typography.titleMd,
+    color: Neutral[700],
+    marginBottom: Spacing.sm,
   },
   emptySubtext: {
-    fontSize: 14,
-    color: '#999',
+    ...Typography.body,
+    color: Neutral[500],
     textAlign: 'center',
-    paddingHorizontal: 40,
+    paddingHorizontal: Spacing.xl,
   },
 });
 

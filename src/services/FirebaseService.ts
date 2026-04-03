@@ -11,6 +11,8 @@ import {
 import {Platform} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ApiClient from './ApiClient';
+import NotificationService from './NotificationService';
+import AppState from './AppState';
 
 class FirebaseService {
   private fcmToken: string | null = null;
@@ -86,6 +88,28 @@ class FirebaseService {
     // Notification reçue quand l'app est au premier plan
     onMessage(m, async (remoteMessage) => {
       console.log('[FirebaseService] Notification reçue (foreground):', remoteMessage);
+      const data = (remoteMessage.data || {}) as Record<string, string>;
+      const body = remoteMessage.notification?.body ?? null;
+
+      if (data.type === 'message') {
+        // Ne pas notifier si la conversation est déjà ouverte
+        if (!AppState.isChatOpen(data.senderId)) {
+          await NotificationService.showMessageNotification(
+            data.senderName || data.senderEmail || '',
+            data.senderEmail || '',
+            body,
+            data.senderId,
+            data.senderFirstName,
+            data.senderLastName,
+          );
+        }
+      } else if (data.type === 'friend_request') {
+        await NotificationService.showFriendRequestNotification(
+          data.senderName || '',
+          data.senderEmail || '',
+          data.senderId,
+        );
+      }
     });
 
     // Notification tapée quand l'app est en arrière-plan ou fermée

@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useState, useMemo} from 'react';
 import {
   View,
   Text,
@@ -11,16 +11,23 @@ import {
   ScrollView,
   Image,
 } from 'react-native';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import AuthService from '../services/AuthService';
+import {useTheme} from '../context/ThemeContext';
+import {Neutral, Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
 
 interface LoginScreenProps {
   navigation: any;
 }
 
 const LoginScreen: React.FC<LoginScreenProps> = ({navigation}) => {
+  const {theme} = useTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  const S = useMemo(() => createStyles(theme), [theme]);
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -31,7 +38,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({navigation}) => {
     setLoading(true);
     try {
       await AuthService.login(email, password);
-      // Réinitialiser la navigation vers Home
       navigation.reset({
         index: 0,
         routes: [{name: 'Home'}],
@@ -77,52 +83,79 @@ const LoginScreen: React.FC<LoginScreenProps> = ({navigation}) => {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={S.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
-        <View style={styles.content}>
+      <ScrollView
+        contentContainerStyle={S.scrollContainer}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}>
+
+        {/* Header coloré */}
+        <View style={S.hero}>
           <Image
             source={require('../../good friends large.png')}
-            style={styles.logo}
+            style={S.logo}
             resizeMode="contain"
           />
-          <Text style={styles.subtitle}>Connectez-vous à votre compte</Text>
+        </View>
 
-          <TextInput
-            style={styles.input}
-            placeholder="exemple@email.com"
-            placeholderTextColor="#999"
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
+        {/* Carte formulaire */}
+        <View style={S.card}>
+          <Text style={S.cardTitle}>Connexion</Text>
+          <Text style={S.cardSubtitle}>Content de vous revoir !</Text>
 
-          <TextInput
-            style={styles.input}
-            placeholder="Entrez votre mot de passe"
-            placeholderTextColor="#999"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            autoCapitalize="none"
-          />
+          <Text style={S.label}>Adresse e-mail</Text>
+          <View style={S.inputWrapper}>
+            <MaterialIcons name="email" size={20} color={Neutral[400]} style={S.inputIcon} />
+            <TextInput
+              style={S.input}
+              placeholder="exemple@email.com"
+              placeholderTextColor={Neutral[400]}
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
+
+          <Text style={S.label}>Mot de passe</Text>
+          <View style={S.inputWrapper}>
+            <MaterialIcons name="lock" size={20} color={Neutral[400]} style={S.inputIcon} />
+            <TextInput
+              style={[S.input, S.inputFlex]}
+              placeholder="Votre mot de passe"
+              placeholderTextColor={Neutral[400]}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+            />
+            <TouchableOpacity onPress={() => setShowPassword(v => !v)} style={S.eyeBtn}>
+              <MaterialIcons
+                name={showPassword ? 'visibility-off' : 'visibility'}
+                size={20}
+                color={Neutral[400]}
+              />
+            </TouchableOpacity>
+          </View>
 
           <TouchableOpacity
-            style={[styles.button, loading && styles.buttonDisabled]}
+            style={[S.btn, loading && S.btnDisabled]}
             onPress={handleLogin}
+            activeOpacity={0.85}
             disabled={loading}>
-            <Text style={styles.buttonText}>
-              {loading ? 'Connexion...' : 'Se connecter'}
+            <Text style={S.btnText}>
+              {loading ? 'Connexion…' : 'Se connecter'}
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.linkButton}
+            style={S.linkBtn}
             onPress={() => navigation.navigate('Register')}>
-            <Text style={styles.linkText}>
-              Pas encore de compte ? Inscrivez-vous
+            <Text style={S.linkText}>
+              Pas encore de compte ?{' '}
+              <Text style={S.linkTextBold}>Inscrivez-vous</Text>
             </Text>
           </TouchableOpacity>
         </View>
@@ -131,68 +164,105 @@ const LoginScreen: React.FC<LoginScreenProps> = ({navigation}) => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: theme.primary,
   },
   scrollContainer: {
     flexGrow: 1,
-    justifyContent: 'center',
   },
-  content: {
-    padding: 20,
+  hero: {
+    backgroundColor: theme.primary,
+    alignItems: 'center',
+    paddingTop: 64,
+    paddingBottom: 40,
+    paddingHorizontal: Spacing.xl,
   },
   logo: {
-    width: '100%',
-    height: 80,
-    marginBottom: 30,
+    width: 220,
+    height: 70,
   },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#2196F3',
-    textAlign: 'center',
-    marginBottom: 10,
+  card: {
+    backgroundColor: Neutral[50],
+    borderTopLeftRadius: Radius.xxl,
+    borderTopRightRadius: Radius.xxl,
+    flex: 1,
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.xxl,
+    paddingBottom: Spacing.xxxl,
   },
-  subtitle: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 40,
+  cardTitle: {
+    ...Typography.title,
+    color: Neutral[900],
+    marginBottom: Spacing.xs,
+  },
+  cardSubtitle: {
+    ...Typography.body,
+    color: Neutral[500],
+    marginBottom: Spacing.xl,
+  },
+  label: {
+    ...Typography.label,
+    color: Neutral[600],
+    marginBottom: 6,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Neutral[0],
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    borderColor: Neutral[200],
+    marginBottom: Spacing.base,
+  },
+  inputIcon: {
+    paddingLeft: Spacing.base,
   },
   input: {
-    backgroundColor: '#fff',
-    padding: 15,
-    borderRadius: 10,
-    marginBottom: 15,
-    fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    color: '#333',
+    flex: 1,
+    fontSize: 15,
+    color: Neutral[800],
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 14,
   },
-  button: {
-    backgroundColor: '#2196F3',
-    padding: 15,
-    borderRadius: 10,
+  inputFlex: {
+    flex: 1,
+  },
+  eyeBtn: {
+    paddingHorizontal: Spacing.base,
+    paddingVertical: 14,
+  },
+  btn: {
+    backgroundColor: theme.primary,
+    borderRadius: Radius.md,
+    height: 52,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: Spacing.sm,
+    ...Shadow.sm,
   },
-  buttonDisabled: {
-    backgroundColor: '#ccc',
+  btnText: {
+    ...Typography.titleSm,
+    color: '#FFF',
+    letterSpacing: 0.3,
   },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
+  btnDisabled: {
+    backgroundColor: Neutral[300],
   },
-  linkButton: {
-    marginTop: 20,
+  linkBtn: {
+    marginTop: Spacing.xl,
     alignItems: 'center',
   },
   linkText: {
-    color: '#2196F3',
-    fontSize: 14,
+    ...Typography.bodyMd,
+    color: Neutral[600],
+  },
+  linkTextBold: {
+    color: theme.primary,
+    fontWeight: '600',
   },
 });
 

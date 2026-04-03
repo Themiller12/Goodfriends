@@ -1,4 +1,4 @@
-import React, {useState, useEffect} from 'react';
+﻿import React, {useState, useEffect, useMemo} from 'react';
 import {
   View,
   Text,
@@ -9,14 +9,16 @@ import {
   Alert,
   Platform,
   Modal,
-  PermissionsAndroid,
   FlatList,
   Image,
+  StatusBar,
 } from 'react-native';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Contacts from 'react-native-contacts';
 import {launchImageLibrary} from 'react-native-image-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import {useTheme} from '../context/ThemeContext';
+import {Neutral, Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
 import ContactService from '../services/ContactService';
 import StorageService from '../services/StorageService';
 import NotificationService from '../services/NotificationService';
@@ -28,6 +30,7 @@ interface AddContactScreenProps {
 
 const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
   const {theme} = useTheme();
+  const S = useMemo(() => styles(theme), [theme]);
   // Champs de base
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -55,6 +58,9 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
   const [childDateOfBirth, setChildDateOfBirth] = useState<Date | undefined>(undefined);
   const [showChildDatePicker, setShowChildDatePicker] = useState(false);
   const [childNotes, setChildNotes] = useState('');
+  const [childGender, setChildGender] = useState<'male' | 'female' | 'other'>('male');
+  const [childGifts, setChildGifts] = useState<string[]>([]);
+  const [newGiftText, setNewGiftText] = useState('');
   
   // Relations
   const [allContacts, setAllContacts] = useState<Contact[]>([]);
@@ -138,7 +144,9 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
       id: `temp-${Date.now()}`,
       firstName: childFirstName,
       dateOfBirth: childDateOfBirth,
+      gender: childGender,
       notes: childNotes,
+      gifts: childGifts.length > 0 ? [...childGifts] : undefined,
     };
 
     setChildren([...children, newChild]);
@@ -146,6 +154,9 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
     setChildFirstName('');
     setChildDateOfBirth(undefined);
     setChildNotes('');
+    setChildGender('male');
+    setChildGifts([]);
+    setNewGiftText('');
   };
 
   const handleDeleteChild = (childId: string) => {
@@ -278,24 +289,13 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
   };
 
   const requestContactsPermission = async () => {
-    if (Platform.OS === 'android') {
-      try {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.READ_CONTACTS,
-          {
-            title: 'Permission d\'accès aux contacts',
-            message: 'Goodfriends a besoin d\'accéder à vos contacts pour les importer',
-            buttonPositive: 'Autoriser',
-            buttonNegative: 'Refuser',
-          }
-        );
-        return granted === PermissionsAndroid.RESULTS.GRANTED;
-      } catch (err) {
-        console.warn(err);
-        return false;
-      }
+    try {
+      const permission = await Contacts.requestPermission();
+      return permission === 'authorized';
+    } catch (err) {
+      console.warn(err);
+      return false;
     }
-    return true;
   };
 
   const handleImportContact = async () => {
@@ -364,43 +364,48 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
   });
 
   return (
-    <ScrollView style={styles(theme).container}>
-      <View style={styles(theme).content}>
-        <View style={styles(theme).header}>
-          <View style={styles(theme).headerRow}>
-            <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-              <Text style={styles(theme).backButtonText}>←</Text>
-            </TouchableOpacity>
-            <Text style={styles(theme).title}>Nouveau contact</Text>
-          </View>
-          <View style={styles(theme).headerButtons}>
-            <TouchableOpacity
-              style={styles(theme).importButton}
-              onPress={handleImportContact}>
-              <Text style={styles(theme).importButtonText}>📱 Importer</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles(theme).importButton, styles(theme).goodFriendsButton]}
-              onPress={() => navigation.navigate('SearchUsers')}>
-              <Text style={styles(theme).importButtonText}>👥 GoodFriends</Text>
-            </TouchableOpacity>
-          </View>
+    <View style={S.root}>
+      <StatusBar barStyle="light-content" backgroundColor={theme.primary} />
+      {/* ── Header ── */}
+      <View style={S.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={S.backButton}>
+          <MaterialIcons name="arrow-back" size={22} color="#FFF" />
+        </TouchableOpacity>
+        <View style={S.headerContent}>
+          <Text style={S.title}>Nouveau contact</Text>
+        </View>
+      </View>
+
+      <ScrollView style={S.scroll} contentContainerStyle={S.content} keyboardShouldPersistTaps="handled">
+
+        {/* ── Raccourcis import ── */}
+        <View style={S.quickActions}>
+          <TouchableOpacity style={S.quickActionBtn} onPress={handleImportContact}>
+            <MaterialIcons name="phone-android" size={22} color={theme.primary} />
+            <Text style={[S.quickActionText, {color: theme.primary}]}>Importer des contacts</Text>
+          </TouchableOpacity>
+          <View style={S.quickActionDivider} />
+          <TouchableOpacity style={S.quickActionBtn} onPress={() => navigation.navigate('SearchUsers')}>
+            <MaterialIcons name="group" size={22} color={theme.primary} />
+            <Text style={[S.quickActionText, {color: theme.primary}]}>Rechercher sur Goodfriends</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Prénom */}
-        <Text style={styles(theme).label}>Prénom *</Text>
+        <Text style={S.label}>Prénom *</Text>
         <TextInput
-          style={styles(theme).input}
+          style={S.input}
           placeholder="Prénom"
+          placeholderTextColor={Neutral[400]}
           value={firstName}
           onChangeText={setFirstName}
           autoCapitalize="words"
         />
 
         {/* Nom */}
-        <Text style={styles(theme).label}>Nom *</Text>
+        <Text style={S.label}>Nom *</Text>
         <TextInput
-          style={styles(theme).input}
+          style={S.input}
           placeholder="Nom"
           value={lastName}
           onChangeText={setLastName}
@@ -408,11 +413,11 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
         />
 
         {/* Date de naissance */}
-        <Text style={styles(theme).label}>Date de naissance</Text>
+        <Text style={S.label}>Date de naissance</Text>
         <TouchableOpacity
-          style={styles(theme).dateButton}
+          style={S.dateButton}
           onPress={() => setShowDatePicker(true)}>
-          <Text style={styles(theme).dateButtonText}>
+          <Text style={S.dateButtonText}>
             {dateOfBirth
               ? dateOfBirth.toLocaleDateString('fr-FR')
               : 'Sélectionner une date'}
@@ -430,18 +435,18 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
         )}
 
         {/* Section Enfants */}
-        <View style={styles(theme).section}>
-          <View style={styles(theme).sectionHeader}>
-            <Text style={styles(theme).sectionTitle}>Enfants</Text>
+        <View style={S.section}>
+          <View style={S.sectionHeader}>
+            <Text style={S.sectionTitle}>Enfants</Text>
             <TouchableOpacity
-              style={styles(theme).addButton}
+              style={S.addButton}
               onPress={() => setShowChildModal(true)}>
-              <Text style={styles(theme).addButtonText}>+ Ajouter</Text>
+              <Text style={S.addButtonText}>+ Ajouter</Text>
             </TouchableOpacity>
           </View>
 
           {children.length === 0 ? (
-            <Text style={styles(theme).emptyText}>Aucun enfant ajouté</Text>
+            <Text style={S.emptyText}>Aucun enfant ajouté</Text>
           ) : (
             <>
               {children.map((child) => {
@@ -471,23 +476,23 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
                 }
                 
                 return (
-                  <View key={child.id} style={styles(theme).item}>
-                    <View style={styles(theme).itemContent}>
-                      <Text style={styles(theme).itemName}>{child.firstName}</Text>
-                      {ageText && <Text style={styles(theme).itemDetail}>{ageText}</Text>}
+                  <View key={child.id} style={S.item}>
+                    <View style={S.itemContent}>
+                      <Text style={S.itemName}>{child.firstName}</Text>
+                      {ageText && <Text style={S.itemDetail}>{ageText}</Text>}
                       {child.dateOfBirth && (
-                        <Text style={styles(theme).itemDetail}>
+                        <Text style={S.itemDetail}>
                           Né(e) le {new Date(child.dateOfBirth).toLocaleDateString('fr-FR')}
                         </Text>
                       )}
                       {child.notes && (
-                        <Text style={styles(theme).itemNotes}>{child.notes}</Text>
+                        <Text style={S.itemNotes}>{child.notes}</Text>
                       )}
                     </View>
                     <TouchableOpacity
-                      style={styles(theme).deleteButton}
+                      style={S.deleteButton}
                       onPress={() => handleDeleteChild(child.id)}>
-                      <Text style={styles(theme).deleteButtonText}>✕</Text>
+                      <Text style={S.deleteButtonText}>✕</Text>
                     </TouchableOpacity>
                   </View>
                 );
@@ -497,40 +502,40 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
         </View>
 
         {/* Section Relations */}
-        <View style={styles(theme).section}>
-          <View style={styles(theme).sectionHeader}>
-            <Text style={styles(theme).sectionTitle}>Relations</Text>
+        <View style={S.section}>
+          <View style={S.sectionHeader}>
+            <Text style={S.sectionTitle}>Relations</Text>
             <TouchableOpacity
-              style={styles(theme).addButton}
+              style={S.addButton}
               onPress={() => setShowRelationModal(true)}>
-              <Text style={styles(theme).addButtonText}>+ Ajouter</Text>
+              <Text style={S.addButtonText}>+ Ajouter</Text>
             </TouchableOpacity>
           </View>
 
           {relationships.length === 0 ? (
-            <Text style={styles(theme).emptyText}>Aucune relation ajoutée</Text>
+            <Text style={S.emptyText}>Aucune relation ajoutée</Text>
           ) : (
             <>
               {relationships.map((relation) => {
                 const relatedContact = allContacts.find(c => c.id === relation.contactId);
                 if (!relatedContact) return null;
                 return (
-                  <View key={relation.contactId} style={styles(theme).item}>
-                    <View style={styles(theme).itemContent}>
-                      <Text style={styles(theme).itemType}>
+                  <View key={relation.contactId} style={S.item}>
+                    <View style={S.itemContent}>
+                      <Text style={S.itemType}>
                         {getRelationLabel(relation.relationType)}
                       </Text>
-                      <Text style={styles(theme).itemName}>
+                      <Text style={S.itemName}>
                         {relatedContact.firstName} {relatedContact.lastName}
                       </Text>
                       {relation.notes && (
-                        <Text style={styles(theme).itemNotes}>{relation.notes}</Text>
+                        <Text style={S.itemNotes}>{relation.notes}</Text>
                       )}
                     </View>
                     <TouchableOpacity
-                      style={styles(theme).deleteButton}
+                      style={S.deleteButton}
                       onPress={() => handleDeleteRelation(relation.contactId)}>
-                      <Text style={styles(theme).deleteButtonText}>✕</Text>
+                      <Text style={S.deleteButtonText}>✕</Text>
                     </TouchableOpacity>
                   </View>
                 );
@@ -540,40 +545,40 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
         </View>
 
         {/* Profession */}
-        <Text style={styles(theme).label}>Profession</Text>
+        <Text style={S.label}>Profession</Text>
         <TextInput
-          style={styles(theme).input}
+          style={S.input}
           placeholder="Profession"
           value={profession}
           onChangeText={setProfession}
         />
 
         {/* Groupe */}
-        <View style={styles(theme).groupRow}>
-          <View style={styles(theme).groupLabelContainer}>
-            <Text style={styles(theme).label}>Groupe</Text>
+        <View style={S.groupRow}>
+          <View style={S.groupLabelContainer}>
+            <Text style={S.label}>Groupe</Text>
             <TouchableOpacity
-              style={styles(theme).addGroupButton}
+              style={S.addGroupButton}
               onPress={() => setShowGroupModal(true)}>
-              <Text style={styles(theme).addGroupButtonText}>+ Nouveau</Text>
+              <Text style={S.addGroupButtonText}>+ Nouveau</Text>
             </TouchableOpacity>
           </View>
         </View>
         <TouchableOpacity
-          style={styles(theme).groupSelector}
+          style={S.groupSelector}
           onPress={() => setShowGroupPickerModal(true)}>
-          <Text style={styles(theme).groupSelectorText}>
+          <Text style={S.groupSelectorText}>
             {selectedGroupId
               ? groups.find(g => g.id === selectedGroupId)?.name || 'Aucun groupe'
               : 'Aucun groupe'}
           </Text>
-          <Text style={styles(theme).groupSelectorIcon}>▼</Text>
+          <Text style={S.groupSelectorIcon}>▼</Text>
         </TouchableOpacity>
 
         {/* Notes */}
-        <Text style={styles(theme).label}>Notes</Text>
+        <Text style={S.label}>Notes</Text>
         <TextInput
-          style={[styles(theme).input, styles(theme).textArea]}
+          style={[S.input, S.textArea]}
           placeholder="Notes sur cette personne..."
           value={notes}
           onChangeText={setNotes}
@@ -583,9 +588,9 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
         />
 
         {/* Téléphone */}
-        <Text style={styles(theme).label}>Téléphone</Text>
+        <Text style={S.label}>Téléphone</Text>
         <TextInput
-          style={styles(theme).input}
+          style={S.input}
           placeholder="+33 6 12 34 56 78"
           value={phone}
           onChangeText={setPhone}
@@ -593,9 +598,9 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
         />
 
         {/* Email */}
-        <Text style={styles(theme).label}>Email</Text>
+        <Text style={S.label}>Email</Text>
         <TextInput
-          style={styles(theme).input}
+          style={S.input}
           placeholder="email@example.com"
           value={email}
           onChangeText={setEmail}
@@ -604,60 +609,64 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
         />
 
         {/* Photo */}
-        <Text style={styles(theme).label}>Photo</Text>
+        <Text style={S.label}>Photo</Text>
         <TouchableOpacity
-          style={styles(theme).photoButton}
+          style={S.photoButton}
           onPress={handleSelectPhoto}>
           {photoUri ? (
-            <Image source={{uri: photoUri}} style={styles(theme).photoPreview} />
+            <Image source={{uri: photoUri}} style={S.photoPreview} />
           ) : (
-            <Text style={styles(theme).photoButtonText}>📷 Ajouter une photo</Text>
+            <View style={{flexDirection:'row', alignItems:'center', gap:8}}>
+              <MaterialIcons name="photo-camera" size={22} color={theme.primary} />
+              <Text style={S.photoButtonText}>Ajouter une photo</Text>
+            </View>
           )}
         </TouchableOpacity>
 
         {/* Boutons */}
-        <View style={styles(theme).buttonContainer}>
+        <View style={S.buttonContainer}>
           <TouchableOpacity
-            style={[styles(theme).button, styles(theme).cancelButton]}
+            style={[S.button, S.cancelButton]}
             onPress={() => navigation.goBack()}>
-            <Text style={styles(theme).cancelButtonText}>Annuler</Text>
+            <Text style={S.cancelButtonText}>Annuler</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles(theme).button, styles(theme).saveButton, loading && styles(theme).buttonDisabled]}
+            style={[S.button, S.saveButton, loading && S.buttonDisabled]}
             onPress={handleSave}
             disabled={loading}>
-            <Text style={styles(theme).saveButtonText}>
+            <Text style={S.saveButtonText}>
               {loading ? 'Enregistrement...' : 'Enregistrer'}
             </Text>
           </TouchableOpacity>
         </View>
-      </View>
 
       {/* Modal Ajouter un enfant */}
       <Modal
         animationType="slide"
         transparent={true}
+        statusBarTranslucent={true}
         visible={showChildModal}
         onRequestClose={() => setShowChildModal(false)}>
-        <View style={styles(theme).modalContainer}>
-          <View style={styles(theme).modalContent}>
-            <Text style={styles(theme).modalTitle}>Ajouter un enfant</Text>
+        <View style={S.modalContainer}>
+          <ScrollView style={{width: '100%'}} contentContainerStyle={{flexGrow: 1, justifyContent: 'center', alignItems: 'center'}} keyboardShouldPersistTaps="handled">
+          <View style={S.modalContent}>
+            <Text style={S.modalTitle}>Ajouter un enfant</Text>
 
-            <Text style={styles(theme).modalLabel}>Prénom *</Text>
+            <Text style={S.modalLabel}>Prénom *</Text>
             <TextInput
-              style={styles(theme).modalInput}
+              style={S.modalInput}
               placeholder="Prénom de l'enfant"
               value={childFirstName}
               onChangeText={setChildFirstName}
               autoCapitalize="words"
             />
 
-            <Text style={styles(theme).modalLabel}>Date de naissance</Text>
+            <Text style={S.modalLabel}>Date de naissance</Text>
             <TouchableOpacity
-              style={styles(theme).dateButton}
+              style={S.dateButton}
               onPress={() => setShowChildDatePicker(true)}>
-              <Text style={styles(theme).dateButtonText}>
+              <Text style={S.dateButtonText}>
                 {childDateOfBirth
                   ? childDateOfBirth.toLocaleDateString('fr-FR')
                   : 'Sélectionner une date'}
@@ -674,9 +683,23 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
               />
             )}
 
-            <Text style={styles(theme).modalLabel}>Notes</Text>
+            <Text style={S.modalLabel}>Sexe</Text>
+            <View style={S.genderRow}>
+              {(['male', 'female', 'other'] as const).map(g => (
+                <TouchableOpacity
+                  key={g}
+                  style={[S.genderBtn, childGender === g && S.genderBtnActive]}
+                  onPress={() => setChildGender(g)}>
+                  <Text style={[S.genderBtnText, childGender === g && S.genderBtnTextActive]}>
+                    {g === 'male' ? 'Garçon' : g === 'female' ? 'Fille' : 'Autre'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={S.modalLabel}>Notes</Text>
             <TextInput
-              style={[styles(theme).modalInput, styles(theme).textArea]}
+              style={[S.modalInput, S.textArea]}
               placeholder="Notes..."
               value={childNotes}
               onChangeText={setChildNotes}
@@ -685,24 +708,56 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
               textAlignVertical="top"
             />
 
-            <View style={styles(theme).modalButtons}>
+            <Text style={S.modalLabel}>Cadeaux offerts</Text>
+            {childGifts.map((gift, idx) => (
+              <View key={idx} style={S.giftRow}>
+                <Text style={S.giftText}>{gift}</Text>
+                <TouchableOpacity onPress={() => setChildGifts(childGifts.filter((_, i) => i !== idx))}>
+                  <MaterialIcons name="close" size={18} color="#e53935" />
+                </TouchableOpacity>
+              </View>
+            ))}
+            <View style={S.giftInputRow}>
+              <TextInput
+                style={[S.modalInput, {flex: 1, marginBottom: 0, marginRight: 8}]}
+                placeholder="Ex: Lego, livre..."
+                value={newGiftText}
+                onChangeText={setNewGiftText}
+              />
               <TouchableOpacity
-                style={[styles(theme).button, styles(theme).cancelButton]}
+                style={S.giftAddBtn}
+                onPress={() => {
+                  if (newGiftText.trim()) {
+                    setChildGifts([...childGifts, newGiftText.trim()]);
+                    setNewGiftText('');
+                  }
+                }}>
+                <MaterialIcons name="add" size={22} color="#fff" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={S.modalButtons}>
+              <TouchableOpacity
+                style={[S.button, S.cancelButton]}
                 onPress={() => {
                   setShowChildModal(false);
                   setChildFirstName('');
                   setChildDateOfBirth(undefined);
                   setChildNotes('');
+                  setChildGender('male');
+                  setChildGifts([]);
+                  setNewGiftText('');
                 }}>
-                <Text style={styles(theme).cancelButtonText}>Annuler</Text>
+                <Text style={S.cancelButtonText}>Annuler</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles(theme).button, styles(theme).saveButton]}
+                style={[S.button, S.saveButton]}
                 onPress={handleAddChild}>
-                <Text style={styles(theme).saveButtonText}>Ajouter</Text>
+                <Text style={S.saveButtonText}>Ajouter</Text>
               </TouchableOpacity>
             </View>
           </View>
+          </ScrollView>
         </View>
       </Modal>
 
@@ -710,55 +765,56 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
       <Modal
         animationType="slide"
         transparent={true}
+        statusBarTranslucent={true}
         visible={showRelationModal}
         onRequestClose={() => setShowRelationModal(false)}>
-        <View style={styles(theme).modalContainer}>
-          <View style={styles(theme).modalContent}>
-            <Text style={styles(theme).modalTitle}>Ajouter une relation</Text>
+        <View style={S.modalContainer}>
+          <View style={S.modalContent}>
+            <Text style={S.modalTitle}>Ajouter une relation</Text>
 
-            <Text style={styles(theme).modalLabel}>Rechercher un contact *</Text>
+            <Text style={S.modalLabel}>Rechercher un contact *</Text>
             <TextInput
-              style={styles(theme).modalInput}
+              style={S.modalInput}
               placeholder="Nom ou prénom..."
               value={searchQuery}
               onChangeText={setSearchQuery}
             />
 
-            <View style={styles(theme).contactList}>
+            <View style={S.contactList}>
               <FlatList
                 data={filteredContacts}
                 keyExtractor={item => item.id}
                 renderItem={({item}) => (
                   <TouchableOpacity
                     style={[
-                      styles(theme).contactItem,
-                      selectedContactId === item.id && styles(theme).contactItemSelected,
+                      S.contactItem,
+                      selectedContactId === item.id && S.contactItemSelected,
                     ]}
                     onPress={() => setSelectedContactId(item.id)}>
-                    <Text style={styles(theme).contactItemText}>
+                    <Text style={S.contactItemText}>
                       {item.firstName} {item.lastName}
                     </Text>
                   </TouchableOpacity>
                 )}
                 ListEmptyComponent={
-                  <Text style={styles(theme).emptyText}>Aucun contact trouvé</Text>
+                  <Text style={S.emptyText}>Aucun contact trouvé</Text>
                 }
               />
             </View>
 
-            <Text style={styles(theme).modalLabel}>Type de relation *</Text>
+            <Text style={S.modalLabel}>Type de relation *</Text>
             <TouchableOpacity
-              style={styles(theme).relationTypeSelector}
+              style={S.relationTypeSelector}
               onPress={() => setShowRelationTypePickerModal(true)}>
-              <Text style={styles(theme).relationTypeSelectorText}>
+              <Text style={S.relationTypeSelectorText}>
                 {getRelationLabel(relationType)}
               </Text>
-              <Text style={styles(theme).relationTypeSelectorIcon}>▼</Text>
+              <Text style={S.relationTypeSelectorIcon}>▼</Text>
             </TouchableOpacity>
 
-            <Text style={styles(theme).modalLabel}>Notes</Text>
+            <Text style={S.modalLabel}>Notes</Text>
             <TextInput
-              style={[styles(theme).modalInput, styles(theme).textArea]}
+              style={[S.modalInput, S.textArea]}
               placeholder="Notes..."
               value={relationNotes}
               onChangeText={setRelationNotes}
@@ -767,9 +823,9 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
               textAlignVertical="top"
             />
 
-            <View style={styles(theme).modalButtons}>
+            <View style={S.modalButtons}>
               <TouchableOpacity
-                style={[styles(theme).button, styles(theme).cancelButton]}
+                style={[S.button, S.cancelButton]}
                 onPress={() => {
                   setShowRelationModal(false);
                   setSelectedContactId('');
@@ -777,12 +833,12 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
                   setRelationNotes('');
                   setSearchQuery('');
                 }}>
-                <Text style={styles(theme).cancelButtonText}>Annuler</Text>
+                <Text style={S.cancelButtonText}>Annuler</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles(theme).button, styles(theme).saveButton]}
+                style={[S.button, S.saveButton]}
                 onPress={handleAddRelation}>
-                <Text style={styles(theme).saveButtonText}>Ajouter</Text>
+                <Text style={S.saveButtonText}>Ajouter</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -793,42 +849,43 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
       <Modal
         animationType="slide"
         transparent={true}
+        statusBarTranslucent={true}
         visible={showGroupModal}
         onRequestClose={() => setShowGroupModal(false)}>
-        <View style={styles(theme).modalContainer}>
-          <View style={styles(theme).modalContent}>
-            <Text style={styles(theme).modalTitle}>Nouveau groupe</Text>
+        <View style={S.modalContainer}>
+          <View style={S.modalContent}>
+            <Text style={S.modalTitle}>Nouveau groupe</Text>
 
-            <Text style={styles(theme).modalLabel}>Nom du groupe *</Text>
+            <Text style={S.modalLabel}>Nom du groupe *</Text>
             <TextInput
-              style={styles(theme).modalInput}
+              style={S.modalInput}
               placeholder="Famille, Amis, Collègues..."
               value={newGroupName}
               onChangeText={setNewGroupName}
             />
 
-            <Text style={styles(theme).modalLabel}>Type</Text>
+            <Text style={S.modalLabel}>Type</Text>
             <TouchableOpacity
-              style={styles(theme).groupSelector}
+              style={S.groupSelector}
               onPress={() => setShowGroupTypePickerModal(true)}>
-              <Text style={styles(theme).groupSelectorText}>
+              <Text style={S.groupSelectorText}>
                 {newGroupType === GroupType.FAMILY ? 'Famille' :
                  newGroupType === GroupType.FRIENDS ? 'Amis' :
                  newGroupType === GroupType.WORK ? 'Travail' : 'Autre'}
               </Text>
-              <Text style={styles(theme).groupSelectorIcon}>▼</Text>
+              <Text style={S.groupSelectorIcon}>▼</Text>
             </TouchableOpacity>
 
-            <View style={styles(theme).modalButtons}>
+            <View style={S.modalButtons}>
               <TouchableOpacity
-                style={[styles(theme).modalButton, styles(theme).modalCancelButton]}
+                style={[S.modalButton, S.modalCancelButton]}
                 onPress={() => setShowGroupModal(false)}>
-                <Text style={styles(theme).modalCancelButtonText}>Annuler</Text>
+                <Text style={S.modalCancelButtonText}>Annuler</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles(theme).modalButton, styles(theme).modalSaveButton]}
+                style={[S.modalButton, S.modalSaveButton]}
                 onPress={handleQuickCreateGroup}>
-                <Text style={styles(theme).modalSaveButtonText}>Créer</Text>
+                <Text style={S.modalSaveButtonText}>Créer</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -839,14 +896,15 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
       <Modal
         animationType="slide"
         transparent={true}
+        statusBarTranslucent={true}
         visible={showContactPickerModal}
         onRequestClose={() => setShowContactPickerModal(false)}>
-        <View style={styles(theme).modalContainer}>
-          <View style={styles(theme).modalContent}>
-            <Text style={styles(theme).modalTitle}>Sélectionner un contact</Text>
+        <View style={S.modalContainer}>
+          <View style={S.modalContent}>
+            <Text style={S.modalTitle}>Sélectionner un contact</Text>
 
             <TextInput
-              style={styles(theme).modalInput}
+              style={S.modalInput}
               placeholder="Rechercher..."
               value={contactSearchQuery}
               onChangeText={setContactSearchQuery}
@@ -855,33 +913,33 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
             <FlatList
               data={filteredPhoneContacts}
               keyExtractor={(item) => item.recordID}
-              style={styles(theme).phoneContactList}
+              style={S.phoneContactList}
               renderItem={({item}) => (
                 <TouchableOpacity
-                  style={styles(theme).phoneContactItem}
+                  style={S.phoneContactItem}
                   onPress={() => handleSelectPhoneContact(item)}>
-                  <Text style={styles(theme).phoneContactName}>
+                  <Text style={S.phoneContactName}>
                     {item.givenName || ''} {item.familyName || ''}
                   </Text>
                   {item.phoneNumbers && item.phoneNumbers.length > 0 && (
-                    <Text style={styles(theme).phoneContactPhone}>
+                    <Text style={S.phoneContactPhone}>
                       {item.phoneNumbers[0].number}
                     </Text>
                   )}
                 </TouchableOpacity>
               )}
               ListEmptyComponent={
-                <Text style={styles(theme).emptyText}>Aucun contact trouvé</Text>
+                <Text style={S.emptyText}>Aucun contact trouvé</Text>
               }
             />
 
             <TouchableOpacity
-              style={[styles(theme).modalButton, styles(theme).modalCancelButton]}
+              style={[S.modalButton, S.modalCancelButton]}
               onPress={() => {
                 setShowContactPickerModal(false);
                 setContactSearchQuery('');
               }}>
-              <Text style={styles(theme).modalCancelButtonText}>Annuler</Text>
+              <Text style={S.modalCancelButtonText}>Annuler</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -891,36 +949,37 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
       <Modal
         animationType="slide"
         transparent={true}
+        statusBarTranslucent={true}
         visible={showGroupPickerModal}
         onRequestClose={() => setShowGroupPickerModal(false)}>
-        <View style={styles(theme).modalContainer}>
-          <View style={styles(theme).modalContent}>
-            <Text style={styles(theme).modalTitle}>Sélectionner un groupe</Text>
+        <View style={S.modalContainer}>
+          <View style={S.modalContent}>
+            <Text style={S.modalTitle}>Sélectionner un groupe</Text>
 
             <TouchableOpacity
-              style={styles(theme).groupPickerOption}
+              style={S.groupPickerOption}
               onPress={() => {
                 setSelectedGroupId('');
                 setShowGroupPickerModal(false);
               }}>
-              <Text style={styles(theme).groupPickerOptionText}>Aucun groupe</Text>
+              <Text style={S.groupPickerOptionText}>Aucun groupe</Text>
             </TouchableOpacity>
 
-            <ScrollView style={styles(theme).groupPickerList}>
+            <ScrollView style={S.groupPickerList}>
               {groups.map((group) => (
                 <TouchableOpacity
                   key={group.id}
                   style={[
-                    styles(theme).groupPickerOption,
-                    selectedGroupId === group.id && styles(theme).groupPickerOptionSelected
+                    S.groupPickerOption,
+                    selectedGroupId === group.id && S.groupPickerOptionSelected
                   ]}
                   onPress={() => {
                     setSelectedGroupId(group.id);
                     setShowGroupPickerModal(false);
                   }}>
                   <Text style={[
-                    styles(theme).groupPickerOptionText,
-                    selectedGroupId === group.id && styles(theme).groupPickerOptionTextSelected
+                    S.groupPickerOptionText,
+                    selectedGroupId === group.id && S.groupPickerOptionTextSelected
                   ]}>
                     {group.name}
                   </Text>
@@ -929,9 +988,9 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
             </ScrollView>
 
             <TouchableOpacity
-              style={[styles(theme).modalButton, styles(theme).modalCancelButton]}
+              style={[S.modalButton, S.modalCancelButton]}
               onPress={() => setShowGroupPickerModal(false)}>
-              <Text style={styles(theme).modalCancelButtonText}>Annuler</Text>
+              <Text style={S.modalCancelButtonText}>Annuler</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -941,11 +1000,12 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
       <Modal
         animationType="slide"
         transparent={true}
+        statusBarTranslucent={true}
         visible={showGroupTypePickerModal}
         onRequestClose={() => setShowGroupTypePickerModal(false)}>
-        <View style={styles(theme).modalContainer}>
-          <View style={styles(theme).modalContent}>
-            <Text style={styles(theme).modalTitle}>Type de groupe</Text>
+        <View style={S.modalContainer}>
+          <View style={S.modalContent}>
+            <Text style={S.modalTitle}>Type de groupe</Text>
 
             {[
               {type: GroupType.FAMILY, label: 'Famille'},
@@ -956,24 +1016,24 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
               <TouchableOpacity
                 key={type}
                 style={[
-                  styles(theme).groupPickerOption,
-                  newGroupType === type && styles(theme).groupPickerOptionSelected
+                  S.groupPickerOption,
+                  newGroupType === type && S.groupPickerOptionSelected
                 ]}
                 onPress={() => {
                   setNewGroupType(type);
                   setShowGroupTypePickerModal(false);
                 }}>
                 <Text style={[
-                  styles(theme).groupPickerOptionText,
-                  newGroupType === type && styles(theme).groupPickerOptionTextSelected
+                  S.groupPickerOptionText,
+                  newGroupType === type && S.groupPickerOptionTextSelected
                 ]}>{label}</Text>
               </TouchableOpacity>
             ))}
 
             <TouchableOpacity
-              style={[styles(theme).modalButton, styles(theme).modalCancelButton]}
+              style={[S.modalButton, S.modalCancelButton]}
               onPress={() => setShowGroupTypePickerModal(false)}>
-              <Text style={styles(theme).modalCancelButtonText}>Annuler</Text>
+              <Text style={S.modalCancelButtonText}>Annuler</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -983,11 +1043,12 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
       <Modal
         animationType="slide"
         transparent={true}
+        statusBarTranslucent={true}
         visible={showRelationTypePickerModal}
         onRequestClose={() => setShowRelationTypePickerModal(false)}>
-        <View style={styles(theme).modalContainer}>
-          <View style={styles(theme).modalContent}>
-            <Text style={styles(theme).modalTitle}>Type de relation</Text>
+        <View style={S.modalContainer}>
+          <View style={S.modalContent}>
+            <Text style={S.modalTitle}>Type de relation</Text>
 
             {[
               {type: RelationType.SPOUSE, label: 'Conjoint(e)'},
@@ -1000,147 +1061,168 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
               <TouchableOpacity
                 key={type}
                 style={[
-                  styles(theme).relationTypeOption,
-                  relationType === type && styles(theme).relationTypeOptionSelected
+                  S.relationTypeOption,
+                  relationType === type && S.relationTypeOptionSelected
                 ]}
                 onPress={() => {
                   setRelationType(type);
                   setShowRelationTypePickerModal(false);
                 }}>
                 <Text style={[
-                  styles(theme).relationTypeOptionText,
-                  relationType === type && styles(theme).relationTypeOptionTextSelected
+                  S.relationTypeOptionText,
+                  relationType === type && S.relationTypeOptionTextSelected
                 ]}>{label}</Text>
               </TouchableOpacity>
             ))}
 
             <TouchableOpacity
-              style={[styles(theme).button, styles(theme).cancelButton]}
+              style={[S.button, S.cancelButton]}
               onPress={() => setShowRelationTypePickerModal(false)}>
-              <Text style={styles(theme).cancelButtonText}>Annuler</Text>
+              <Text style={S.cancelButtonText}>Annuler</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
     </ScrollView>
+    </View>
   );
 };
 
 const styles = (theme: any) => StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: Neutral[50],
   },
-  content: {
-    padding: 20,
-  },
+  // ── Header ──
   header: {
     backgroundColor: theme.primary,
-    padding: 20,
-    paddingTop: 40,
+    paddingTop: 52,
     paddingBottom: 20,
-    marginBottom: 20,
-    marginHorizontal: -20,
-    marginTop: -20,
-  },
-  headerRow: {
+    paddingHorizontal: Spacing.xl,
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
+    borderBottomLeftRadius: Radius.xxl,
+    borderBottomRightRadius: Radius.xxl,
+    ...Shadow.md,
   },
   backButton: {
-    marginRight: 15,
-    padding: 5,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: Spacing.md,
   },
-  backButtonText: {
-    fontSize: 28,
-    color: '#fff',
-    fontWeight: 'bold',
-  },
-  headerButtons: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 10,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  importButton: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 8,
+  headerContent: {
     flex: 1,
   },
-  goodFriendsButton: {
-    backgroundColor: theme.primary,
+  title: {
+    ...Typography.title,
+    color: '#FFF',
   },
-  importButtonText: {
-    color: '#fff',
-    fontSize: 14,
+  headerBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quickActions: {
+    flexDirection: 'row',
+    backgroundColor: '#FFF',
+    borderRadius: Radius.lg,
+    marginBottom: Spacing.xl,
+    overflow: 'hidden',
+    ...Shadow.sm,
+  },
+  quickActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+  },
+  quickActionText: {
+    ...Typography.body,
+    fontSize: 13,
     fontWeight: '600',
-    textAlign: 'center',
+    flexShrink: 1,
+  },
+  quickActionDivider: {
+    width: 1,
+    backgroundColor: Neutral[100],
+    marginVertical: 10,
+  },
+  // ── Scroll & form ──
+  scroll: {
+    flex: 1,
+  },
+  content: {
+    padding: Spacing.base,
+    paddingTop: Spacing.xl,
+    paddingBottom: 40,
   },
   label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#666',
+    ...Typography.label,
+    color: Neutral[600],
     marginBottom: 5,
-    marginTop: 15,
+    marginTop: Spacing.base,
+    fontWeight: '600',
   },
   input: {
-    backgroundColor: '#fff',
-    padding: 15,
-    borderRadius: 10,
-    fontSize: 16,
+    backgroundColor: Neutral[0],
+    padding: Spacing.base,
+    borderRadius: Radius.md,
+    ...Typography.body,
+    color: Neutral[800],
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: Neutral[200],
   },
   textArea: {
     height: 100,
-    paddingTop: 15,
+    paddingTop: Spacing.base,
     textAlignVertical: 'top',
   },
   dateButton: {
-    backgroundColor: '#fff',
-    padding: 15,
-    borderRadius: 10,
+    backgroundColor: Neutral[0],
+    padding: Spacing.base,
+    borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: Neutral[200],
   },
   dateButtonText: {
-    fontSize: 16,
-    color: '#333',
+    ...Typography.body,
+    color: Neutral[700],
   },
   section: {
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 15,
-    marginTop: 15,
-    borderWidth: 1,
-    borderColor: '#ddd',
+    backgroundColor: Neutral[0],
+    borderRadius: Radius.lg,
+    padding: Spacing.base,
+    marginTop: Spacing.base,
+    ...Shadow.sm,
   },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: Spacing.sm,
   },
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
+    ...Typography.titleSm,
+    color: Neutral[800],
   },
   addButton: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
+    backgroundColor: theme.primary,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 5,
+    borderRadius: Radius.sm,
   },
   addButtonText: {
-    color: '#fff',
+    color: '#FFF',
     fontSize: 12,
     fontWeight: 'bold',
   },
@@ -1148,52 +1230,52 @@ const styles = (theme: any) => StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 8,
-    marginBottom: 8,
+    padding: Spacing.sm,
+    backgroundColor: Neutral[50],
+    borderRadius: Radius.md,
+    marginBottom: 6,
   },
   itemContent: {
     flex: 1,
   },
   itemType: {
-    fontSize: 12,
+    fontSize: 11,
     color: theme.primary,
-    fontWeight: 'bold',
-    marginBottom: 4,
+    fontWeight: '700',
+    marginBottom: 3,
+    textTransform: 'uppercase',
   },
   itemName: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: '#333',
+    ...Typography.titleSm,
+    color: Neutral[800],
     marginBottom: 2,
   },
   itemDetail: {
-    fontSize: 13,
-    color: '#666',
+    ...Typography.bodyMd,
+    color: Neutral[500],
   },
   itemNotes: {
     fontSize: 12,
-    color: '#999',
+    color: Neutral[400],
     fontStyle: 'italic',
-    marginTop: 4,
+    marginTop: 3,
   },
   deleteButton: {
-    padding: 8,
+    padding: 6,
   },
   deleteButtonText: {
     fontSize: 20,
-    color: '#f44336',
+    color: '#EF5350',
   },
   emptyText: {
     fontSize: 13,
-    color: '#999',
+    color: Neutral[400],
     textAlign: 'center',
     fontStyle: 'italic',
-    paddingVertical: 10,
+    paddingVertical: Spacing.sm,
   },
   groupRow: {
-    marginTop: 15,
+    marginTop: Spacing.base,
   },
   groupLabelContainer: {
     flexDirection: 'row',
@@ -1202,49 +1284,50 @@ const styles = (theme: any) => StyleSheet.create({
     marginBottom: 5,
   },
   addGroupButton: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
+    backgroundColor: theme.primary,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 5,
+    borderRadius: Radius.sm,
   },
   addGroupButtonText: {
-    color: '#fff',
+    color: '#FFF',
     fontSize: 12,
     fontWeight: 'bold',
   },
   groupSelector: {
-    backgroundColor: '#fff',
-    padding: 15,
-    borderRadius: 10,
+    backgroundColor: Neutral[0],
+    padding: Spacing.base,
+    borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: Neutral[200],
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
   groupSelectorText: {
-    fontSize: 16,
-    color: '#333',
+    ...Typography.body,
+    color: Neutral[700],
     flex: 1,
   },
   groupSelectorIcon: {
     fontSize: 12,
-    color: '#666',
+    color: Neutral[500],
   },
   photoButton: {
-    backgroundColor: '#f5f5f5',
-    padding: 15,
-    borderRadius: 10,
+    backgroundColor: Neutral[100],
+    padding: Spacing.base,
+    borderRadius: Radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 20,
+    marginBottom: Spacing.base,
     minHeight: 120,
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: Neutral[200],
+    borderStyle: 'dashed',
   },
   photoButtonText: {
-    color: '#666',
-    fontSize: 16,
+    color: Neutral[500],
+    ...Typography.body,
   },
   photoPreview: {
     width: 100,
@@ -1253,192 +1336,251 @@ const styles = (theme: any) => StyleSheet.create({
   },
   buttonContainer: {
     flexDirection: 'row',
-    gap: 10,
-    marginTop: 30,
-    marginBottom: 20,
+    gap: Spacing.sm,
+    marginTop: Spacing.xl,
+    marginBottom: Spacing.base,
   },
   button: {
     flex: 1,
-    padding: 15,
-    borderRadius: 10,
+    padding: Spacing.base,
+    borderRadius: Radius.md,
     alignItems: 'center',
   },
   cancelButton: {
-    backgroundColor: '#fff',
+    backgroundColor: Neutral[0],
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: Neutral[200],
   },
   cancelButtonText: {
-    color: '#666',
-    fontSize: 16,
-    fontWeight: 'bold',
+    color: Neutral[600],
+    ...Typography.body,
+    fontWeight: '700',
   },
   saveButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: theme.primary,
+    ...Shadow.sm,
   },
   saveButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
+    color: '#FFF',
+    ...Typography.body,
+    fontWeight: '700',
   },
   buttonDisabled: {
-    backgroundColor: '#ccc',
+    backgroundColor: Neutral[300],
   },
+  // ── Modales ──
   modalContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    ...StyleSheet.absoluteFillObject,
   },
   modalContent: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 20,
+    backgroundColor: Neutral[0],
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
     width: '90%',
     maxWidth: 500,
     maxHeight: '80%',
+    ...Shadow.md,
   },
   modalTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 15,
+    ...Typography.titleMd,
+    color: Neutral[800],
+    marginBottom: Spacing.base,
     textAlign: 'center',
   },
   modalLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#666',
+    ...Typography.label,
+    color: Neutral[500],
     marginBottom: 5,
-    marginTop: 10,
+    marginTop: Spacing.sm,
+    fontWeight: '600',
   },
   modalInput: {
-    backgroundColor: '#f5f5f5',
-    padding: 15,
-    borderRadius: 10,
-    fontSize: 16,
+    backgroundColor: Neutral[50],
+    padding: Spacing.base,
+    borderRadius: Radius.md,
+    ...Typography.body,
+    color: Neutral[800],
+    borderWidth: 1,
+    borderColor: Neutral[200],
   },
   modalButtons: {
     flexDirection: 'row',
-    gap: 10,
-    marginTop: 20,
+    gap: Spacing.sm,
+    marginTop: Spacing.base,
   },
   modalButton: {
     flex: 1,
-    padding: 15,
-    borderRadius: 10,
+    padding: Spacing.base,
+    borderRadius: Radius.md,
     alignItems: 'center',
   },
   modalCancelButton: {
-    backgroundColor: '#f5f5f5',
+    backgroundColor: Neutral[100],
   },
   modalCancelButtonText: {
-    color: '#666',
-    fontSize: 16,
-    fontWeight: 'bold',
+    color: Neutral[600],
+    ...Typography.body,
+    fontWeight: '600',
   },
   modalSaveButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: theme.primary,
   },
   modalSaveButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
+    color: '#FFF',
+    ...Typography.body,
+    fontWeight: '700',
   },
   contactList: {
     maxHeight: 200,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 10,
-    marginBottom: 10,
+    backgroundColor: Neutral[50],
+    borderRadius: Radius.md,
+    marginBottom: Spacing.sm,
   },
   contactItem: {
-    padding: 12,
+    padding: Spacing.sm,
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    borderBottomColor: Neutral[100],
   },
   contactItemSelected: {
-    backgroundColor: '#E3F2FD',
+    backgroundColor: theme.primary + '18',
   },
   contactItemText: {
-    fontSize: 15,
-    color: '#333',
+    ...Typography.body,
+    color: Neutral[700],
   },
   phoneContactList: {
     maxHeight: 400,
-    marginVertical: 10,
+    marginVertical: Spacing.sm,
   },
   phoneContactItem: {
-    padding: 15,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 8,
-    marginBottom: 8,
+    padding: Spacing.base,
+    backgroundColor: Neutral[50],
+    borderRadius: Radius.md,
+    marginBottom: 6,
   },
   phoneContactName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 5,
+    ...Typography.titleSm,
+    color: Neutral[800],
+    marginBottom: 4,
   },
   phoneContactPhone: {
-    fontSize: 14,
-    color: '#666',
+    ...Typography.bodyMd,
+    color: Neutral[500],
   },
   groupPickerList: {
     maxHeight: 300,
   },
   groupPickerOption: {
-    padding: 15,
-    borderRadius: 8,
-    backgroundColor: '#f5f5f5',
-    marginBottom: 10,
+    padding: Spacing.base,
+    borderRadius: Radius.md,
+    backgroundColor: Neutral[50],
+    marginBottom: Spacing.sm,
   },
   groupPickerOptionSelected: {
     backgroundColor: theme.primary,
   },
   groupPickerOptionText: {
-    fontSize: 16,
-    color: '#333',
+    ...Typography.body,
+    color: Neutral[700],
   },
   groupPickerOptionTextSelected: {
-    color: '#fff',
-    fontWeight: 'bold',
+    color: '#FFF',
+    fontWeight: '700',
   },
   relationTypeSelector: {
-    backgroundColor: '#fff',
-    padding: 15,
-    borderRadius: 10,
+    backgroundColor: Neutral[0],
+    padding: Spacing.base,
+    borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: Neutral[200],
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 15,
+    marginBottom: Spacing.base,
   },
   relationTypeSelectorText: {
-    fontSize: 16,
-    color: '#333',
+    ...Typography.body,
+    color: Neutral[700],
     flex: 1,
   },
   relationTypeSelectorIcon: {
     fontSize: 12,
-    color: '#666',
+    color: Neutral[500],
   },
   relationTypeOption: {
-    padding: 15,
-    borderRadius: 8,
-    backgroundColor: '#f5f5f5',
-    marginBottom: 10,
+    padding: Spacing.base,
+    borderRadius: Radius.md,
+    backgroundColor: Neutral[50],
+    marginBottom: Spacing.sm,
   },
   relationTypeOptionSelected: {
     backgroundColor: theme.primary,
   },
   relationTypeOptionText: {
-    fontSize: 16,
-    color: '#333',
+    ...Typography.body,
+    color: Neutral[700],
   },
   relationTypeOptionTextSelected: {
-    color: '#fff',
-    fontWeight: 'bold',
+    color: '#FFF',
+    fontWeight: '700',
+  },
+  genderRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginBottom: Spacing.sm,
+  },
+  genderBtn: {
+    flex: 1,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Neutral[300],
+    alignItems: 'center',
+    backgroundColor: Neutral[50],
+  },
+  genderBtnActive: {
+    backgroundColor: theme.primary,
+    borderColor: theme.primary,
+  },
+  genderBtnText: {
+    ...Typography.body,
+    color: Neutral[600],
+    fontWeight: '600',
+  },
+  genderBtnTextActive: {
+    color: '#FFF',
+  },
+  giftRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: Spacing.xs,
+    paddingHorizontal: Spacing.sm,
+    backgroundColor: Neutral[50],
+    borderRadius: Radius.sm,
+    marginBottom: 4,
+  },
+  giftText: {
+    ...Typography.body,
+    color: Neutral[700],
+    flex: 1,
+    marginRight: 8,
+  },
+  giftInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Spacing.sm,
+  },
+  giftAddBtn: {
+    backgroundColor: theme.primary,
+    borderRadius: Radius.md,
+    padding: Spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
 

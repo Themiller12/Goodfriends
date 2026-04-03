@@ -8,6 +8,7 @@ import {
   Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme, THEMES} from '../context/ThemeContext';
 
 const THEMES_ARRAY = Object.values(THEMES);
@@ -61,13 +62,15 @@ const ThemeSettingsScreen: React.FC<ThemeSettingsScreenProps> = ({navigation}) =
       <View style={styles(currentTheme).header}>
         <View style={styles(currentTheme).headerRow}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles(currentTheme).backButton}>
-            <Text style={styles(currentTheme).backButtonText}>←</Text>
+            <View style={styles(currentTheme).backBtnCircle}>
+              <MaterialIcons name="arrow-back" size={22} color="#383830" />
+            </View>
           </TouchableOpacity>
-          <Text style={styles(currentTheme).title}>Choisir un thème</Text>
+          <View>
+            <Text style={styles(currentTheme).title}>Choisir un thème</Text>
+            <Text style={styles(currentTheme).subtitle}>Personnalisez l’apparence de l’application</Text>
+          </View>
         </View>
-        <Text style={styles(currentTheme).subtitle}>
-          Personnalisez l'apparence de l'application
-        </Text>
       </View>
 
       <View style={styles(currentTheme).themesContainer}>
@@ -156,37 +159,39 @@ const ThemeSettingsScreen: React.FC<ThemeSettingsScreenProps> = ({navigation}) =
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fcf9f0',
   },
   header: {
-    padding: 20,
-    paddingTop: 40,
-    paddingBottom: 30,
-    backgroundColor: theme.primary,
+    backgroundColor: '#fcf9f0',
+    paddingHorizontal: 20,
+    paddingTop: 48,
+    paddingBottom: 16,
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 5,
+    gap: 12,
   },
   backButton: {
-    marginRight: 15,
-    padding: 5,
+    padding: 0,
   },
-  backButtonText: {
-    fontSize: 28,
-    color: '#fff',
-    fontWeight: 'bold',
+  backBtnCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 5,
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#383830',
   },
   subtitle: {
-    fontSize: 14,
-    color: '#E3F2FD',
+    fontSize: 13,
+    color: '#65655c',
+    marginTop: 2,
   },
   themesContainer: {
     padding: 15,

@@ -8,7 +8,9 @@ import {
   Switch,
   Alert,
 } from 'react-native';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
+import {Neutral, Spacing, Radius, Shadow, Typography, Semantic} from '../theme/designSystem';
 import NotificationService from '../services/NotificationService';
 import MessageService from '../services/MessageService';
 import FriendRequestService from '../services/FriendRequestService';
@@ -120,13 +122,15 @@ const NotificationSettingsScreen: React.FC<NotificationSettingsScreenProps> = ({
       <View style={styles(theme).header}>
         <View style={styles(theme).headerRow}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-            <Text style={styles(theme).backButtonText}>←</Text>
+            <View style={styles(theme).backBtnCircle}>
+              <MaterialIcons name="arrow-back" size={22} color="#383830" />
+            </View>
           </TouchableOpacity>
-          <Text style={styles(theme).headerTitle}>Notifications</Text>
+          <View>
+            <Text style={styles(theme).headerTitle}>Notifications</Text>
+            <Text style={styles(theme).headerSubtitle}>Gérez vos alertes et rappels</Text>
+          </View>
         </View>
-        <Text style={styles(theme).headerSubtitle}>
-          Gérez vos alertes et rappels
-        </Text>
       </View>
 
       <View style={styles(theme).section}>
@@ -199,96 +203,104 @@ const NotificationSettingsScreen: React.FC<NotificationSettingsScreenProps> = ({
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fcf9f0',
   },
   header: {
-    backgroundColor: theme.primary,
-    padding: 20,
-    paddingTop: 40,
-    paddingBottom: 30,
+    backgroundColor: '#fcf9f0',
+    paddingHorizontal: Spacing.xl,
+    paddingTop: 48,
+    paddingBottom: 16,
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 5,
+    gap: 12,
   },
   backButton: {
-    marginRight: 15,
-    padding: 5,
+    padding: 0,
   },
-  backButtonText: {
-    fontSize: 28,
-    color: '#fff',
-    fontWeight: 'bold',
+  backBtnCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 5,
+    ...Typography.title,
+    color: '#383830',
+    fontSize: 20,
   },
   headerSubtitle: {
-    fontSize: 14,
-    color: '#E3F2FD',
+    ...Typography.bodySm,
+    color: '#65655c',
+    marginTop: 2,
   },
   section: {
-    backgroundColor: '#fff',
-    marginTop: 15,
-    marginHorizontal: 15,
-    borderRadius: 10,
-    padding: 15,
+    backgroundColor: Neutral[0],
+    borderRadius: Radius.lg,
+    marginTop: Spacing.lg,
+    marginHorizontal: Spacing.base,
+    overflow: 'hidden',
+    ...Shadow.sm,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 15,
+    ...Typography.titleSm,
+    color: Neutral[800],
+    paddingHorizontal: Spacing.base,
+    paddingTop: Spacing.base,
+    paddingBottom: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Neutral[100],
   },
   notificationRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 12,
+    paddingVertical: 14,
+    paddingHorizontal: Spacing.base,
     borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomColor: Neutral[100],
   },
   notificationInfo: {
     flex: 1,
-    marginRight: 15,
+    marginRight: Spacing.base,
   },
   notificationTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 5,
+    ...Typography.titleSm,
+    color: Neutral[800],
+    marginBottom: 3,
   },
   notificationDescription: {
-    fontSize: 13,
-    color: '#666',
+    ...Typography.bodySm,
+    color: Neutral[500],
     lineHeight: 18,
   },
   button: {
-    padding: 15,
-    borderRadius: 10,
+    marginHorizontal: Spacing.base,
+    borderRadius: Radius.md,
+    height: 48,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: Spacing.sm,
   },
   testButton: {
-    backgroundColor: '#FF9800',
+    backgroundColor: Semantic.warning,
   },
   testMessageButton: {
-    backgroundColor: '#2196F3',
+    backgroundColor: theme.primary,
   },
   testFriendButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: Semantic.success,
   },
   checkButton: {
-    backgroundColor: '#9C27B0',
+    backgroundColor: '#6A1B9A',
+    marginBottom: Spacing.base,
   },
   buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    ...Typography.titleSm,
+    color: '#FFF',
   },
 });
 

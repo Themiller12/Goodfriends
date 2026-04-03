@@ -22,7 +22,6 @@ class AuthService {
     try {
       const response = await ApiClient.post<ApiResponse<{
         userId: string;
-        verificationCode: string;
         email: string;
       }>>(`${API_CONFIG.ENDPOINTS.AUTH}?action=register`, {
         email,
@@ -50,7 +49,7 @@ class AuthService {
         },
         createdAt: new Date(),
         isVerified: false,
-        verificationCode: response.data.verificationCode,
+        verificationCode: undefined,
       };
 
       return account;
@@ -63,6 +62,9 @@ class AuthService {
   // Connexion
   async login(email: string, password: string): Promise<UserAccount> {
     try {
+      // Effacer l'ancien token pour éviter qu'il soit envoyé dans le header Authorization
+      await ApiClient.clearToken();
+
       const response = await ApiClient.post<ApiResponse<{
         token: string;
         user: any;
@@ -139,21 +141,19 @@ class AuthService {
   }
 
   // Renvoyer le code de vérification
-  async resendVerificationCode(email: string): Promise<string> {
+  async resendVerificationCode(email: string): Promise<void> {
     try {
-      const response = await ApiClient.post<ApiResponse<{verificationCode: string}>>(
+      const response = await ApiClient.post<ApiResponse<undefined>>(
         `${API_CONFIG.ENDPOINTS.AUTH}?action=resend`,
         { email }
       );
 
-      if (!response.success || !response.data) {
+      if (!response.success) {
         throw new Error(response.message);
       }
-
-      return response.data.verificationCode;
     } catch (error: any) {
       console.error('Error resending code:', error);
-      throw new Error(error.response?.data?.message || error.message || 'Erreur lors de l\'envoi du code');
+      throw new Error(error.response?.data?.message || error.message || "Erreur lors de l'envoi du code");
     }
   }
 

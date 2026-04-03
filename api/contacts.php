@@ -39,7 +39,8 @@ if ($method === 'GET' && !isset($_GET['id'])) {
                 'firstName' => $child['first_name'],
                 'dateOfBirth' => $child['date_of_birth'],
                 'gender' => $child['gender'],
-                'notes' => $child['notes']
+                'notes' => $child['notes'],
+                'gifts' => $child['gifts'] ? json_decode($child['gifts'], true) : []
             ];
         }, $childStmt->fetchAll(PDO::FETCH_ASSOC));
         
@@ -49,6 +50,23 @@ if ($method === 'GET' && !isset($_GET['id'])) {
         $relStmt->bindParam(':contact_id', $contactId);
         $relStmt->execute();
         $relationships = $relStmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        // Récupérer les membres de la famille hors-Goodfriends
+        $fmQuery = "SELECT * FROM family_members WHERE contact_id = :contact_id";
+        $fmStmt = $db->prepare($fmQuery);
+        $fmStmt->bindParam(':contact_id', $contactId);
+        $fmStmt->execute();
+        $familyMembers = array_map(function($fm) {
+            return [
+                'id' => $fm['id'],
+                'firstName' => $fm['first_name'],
+                'lastName' => $fm['last_name'],
+                'dateOfBirth' => $fm['date_of_birth'],
+                'gender' => $fm['gender'],
+                'relationType' => $fm['relation_type'],
+                'notes' => $fm['notes']
+            ];
+        }, $fmStmt->fetchAll(PDO::FETCH_ASSOC));
         
         // Récupérer les professions/études
         $profQuery = "SELECT * FROM professions_studies WHERE contact_id = :contact_id ORDER BY year DESC";
@@ -81,6 +99,7 @@ if ($method === 'GET' && !isset($_GET['id'])) {
             'goodfriendsUserId' => $row['goodfriends_user_id'],
             'groupIds' => $row['group_ids'] ? explode(',', $row['group_ids']) : [],
             'children' => $children,
+            'familyMembers' => $familyMembers,
             'professionsStudies' => $professionsStudies,
             'relationships' => array_map(function($rel) {
                 return [
@@ -132,7 +151,8 @@ if ($method === 'GET' && isset($_GET['id'])) {
             'firstName' => $child['first_name'],
             'dateOfBirth' => $child['date_of_birth'],
             'gender' => $child['gender'],
-            'notes' => $child['notes']
+            'notes' => $child['notes'],
+            'gifts' => $child['gifts'] ? json_decode($child['gifts'], true) : []
         ];
     }, $childStmt->fetchAll(PDO::FETCH_ASSOC));
     
@@ -142,6 +162,23 @@ if ($method === 'GET' && isset($_GET['id'])) {
     $relStmt->bindParam(':contact_id', $contactId);
     $relStmt->execute();
     $relationships = $relStmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Récupérer les membres de la famille hors-Goodfriends
+    $fmQuery = "SELECT * FROM family_members WHERE contact_id = :contact_id";
+    $fmStmt = $db->prepare($fmQuery);
+    $fmStmt->bindParam(':contact_id', $contactId);
+    $fmStmt->execute();
+    $familyMembers = array_map(function($fm) {
+        return [
+            'id' => $fm['id'],
+            'firstName' => $fm['first_name'],
+            'lastName' => $fm['last_name'],
+            'dateOfBirth' => $fm['date_of_birth'],
+            'gender' => $fm['gender'],
+            'relationType' => $fm['relation_type'],
+            'notes' => $fm['notes']
+        ];
+    }, $fmStmt->fetchAll(PDO::FETCH_ASSOC));
     
     // Récupérer les professions/études
     $profQuery = "SELECT * FROM professions_studies WHERE contact_id = :contact_id ORDER BY year DESC";
@@ -174,6 +211,7 @@ if ($method === 'GET' && isset($_GET['id'])) {
         'goodfriendsUserId' => $row['goodfriends_user_id'],
         'groupIds' => $groupIds,
         'children' => $children,
+        'familyMembers' => $familyMembers,
         'professionsStudies' => $professionsStudies,
         'relationships' => array_map(function($rel) {
             return [
@@ -268,8 +306,8 @@ if ($method === 'POST') {
                     }
                 }
                 
-                $childQuery = "INSERT INTO children (id, contact_id, first_name, date_of_birth, gender, notes) 
-                              VALUES (:id, :contact_id, :first_name, :date_of_birth, :gender, :notes)";
+                $childQuery = "INSERT INTO children (id, contact_id, first_name, date_of_birth, gender, notes, gifts) 
+                              VALUES (:id, :contact_id, :first_name, :date_of_birth, :gender, :notes, :gifts)";
                 $childStmt = $db->prepare($childQuery);
                 $childStmt->bindParam(':id', $childId);
                 $childStmt->bindParam(':contact_id', $contactId);
@@ -277,10 +315,43 @@ if ($method === 'POST') {
                 $childStmt->bindParam(':date_of_birth', $childDateOfBirth);
                 $childStmt->bindParam(':gender', $child['gender']);
                 $childStmt->bindParam(':notes', $child['notes']);
+                $giftsJson = isset($child['gifts']) && is_array($child['gifts']) ? json_encode($child['gifts']) : null;
+                $childStmt->bindParam(':gifts', $giftsJson);
                 $childStmt->execute();
             }
         }
-        
+
+        // Ajouter les membres de la famille hors-Goodfriends
+        if (isset($data['familyMembers']) && is_array($data['familyMembers'])) {
+            foreach ($data['familyMembers'] as $fm) {
+                $fmId = isset($fm['id']) ? $fm['id'] : generateId();
+                $fmDob = null;
+                if (isset($fm['dateOfBirth']) && !empty($fm['dateOfBirth'])) {
+                    try {
+                        $fmDate = new DateTime($fm['dateOfBirth']);
+                        $fmDob = $fmDate->format('Y-m-d');
+                    } catch (Exception $e) { $fmDob = null; }
+                }
+                $fmLastName     = isset($fm['lastName'])     ? $fm['lastName']     : null;
+                $fmGender       = isset($fm['gender'])       ? $fm['gender']       : null;
+                $fmNotes        = isset($fm['notes'])        ? $fm['notes']        : null;
+                $fmRelationType = $fm['relationType'];
+                $fmFirstName    = $fm['firstName'];
+                $fmQuery = "INSERT INTO family_members (id, contact_id, first_name, last_name, date_of_birth, gender, relation_type, notes)
+                            VALUES (:id, :contact_id, :first_name, :last_name, :date_of_birth, :gender, :relation_type, :notes)";
+                $fmStmt = $db->prepare($fmQuery);
+                $fmStmt->bindParam(':id', $fmId);
+                $fmStmt->bindParam(':contact_id', $contactId);
+                $fmStmt->bindParam(':first_name', $fmFirstName);
+                $fmStmt->bindParam(':last_name', $fmLastName);
+                $fmStmt->bindParam(':date_of_birth', $fmDob);
+                $fmStmt->bindParam(':gender', $fmGender);
+                $fmStmt->bindParam(':relation_type', $fmRelationType);
+                $fmStmt->bindParam(':notes', $fmNotes);
+                $fmStmt->execute();
+            }
+        }
+
         sendResponse(true, 'Contact créé avec succès', ['id' => $contactId], 201);
     } else {
         sendResponse(false, 'Erreur lors de la création', null, 500);
@@ -396,8 +467,8 @@ if ($method === 'PUT') {
                     }
                 }
                 
-                $childQuery = "INSERT INTO children (id, contact_id, first_name, date_of_birth, gender, notes) 
-                              VALUES (:id, :contact_id, :first_name, :date_of_birth, :gender, :notes)";
+                $childQuery = "INSERT INTO children (id, contact_id, first_name, date_of_birth, gender, notes, gifts) 
+                              VALUES (:id, :contact_id, :first_name, :date_of_birth, :gender, :notes, :gifts)";
                 $childStmt = $db->prepare($childQuery);
                 $childStmt->bindParam(':id', $childId);
                 $childStmt->bindParam(':contact_id', $contactId);
@@ -405,6 +476,8 @@ if ($method === 'PUT') {
                 $childStmt->bindParam(':date_of_birth', $childDateOfBirth);
                 $childStmt->bindParam(':gender', $child['gender']);
                 $childStmt->bindParam(':notes', $child['notes']);
+                $giftsJson = isset($child['gifts']) && is_array($child['gifts']) ? json_encode($child['gifts']) : null;
+                $childStmt->bindParam(':gifts', $giftsJson);
                 $childStmt->execute();
             }
         }
@@ -427,6 +500,42 @@ if ($method === 'PUT') {
                 $profStmt->bindParam(':year', $prof['year']);
                 $profStmt->bindParam(':notes', $prof['notes']);
                 $profStmt->execute();
+            }
+        }
+
+        // Mettre à jour les membres de la famille hors-Goodfriends
+        $deleteFM = "DELETE FROM family_members WHERE contact_id = :contact_id";
+        $deleteFMStmt = $db->prepare($deleteFM);
+        $deleteFMStmt->bindParam(':contact_id', $contactId);
+        $deleteFMStmt->execute();
+
+        if (isset($data['familyMembers']) && is_array($data['familyMembers'])) {
+            foreach ($data['familyMembers'] as $fm) {
+                $fmId = isset($fm['id']) ? $fm['id'] : generateId();
+                $fmDob = null;
+                if (isset($fm['dateOfBirth']) && !empty($fm['dateOfBirth'])) {
+                    try {
+                        $fmDate = new DateTime($fm['dateOfBirth']);
+                        $fmDob = $fmDate->format('Y-m-d');
+                    } catch (Exception $e) { $fmDob = null; }
+                }
+                $fmLastName     = isset($fm['lastName'])     ? $fm['lastName']     : null;
+                $fmGender       = isset($fm['gender'])       ? $fm['gender']       : null;
+                $fmNotes        = isset($fm['notes'])        ? $fm['notes']        : null;
+                $fmRelationType = $fm['relationType'];
+                $fmFirstName    = $fm['firstName'];
+                $fmQuery = "INSERT INTO family_members (id, contact_id, first_name, last_name, date_of_birth, gender, relation_type, notes)
+                            VALUES (:id, :contact_id, :first_name, :last_name, :date_of_birth, :gender, :relation_type, :notes)";
+                $fmStmt = $db->prepare($fmQuery);
+                $fmStmt->bindParam(':id', $fmId);
+                $fmStmt->bindParam(':contact_id', $contactId);
+                $fmStmt->bindParam(':first_name', $fmFirstName);
+                $fmStmt->bindParam(':last_name', $fmLastName);
+                $fmStmt->bindParam(':date_of_birth', $fmDob);
+                $fmStmt->bindParam(':gender', $fmGender);
+                $fmStmt->bindParam(':relation_type', $fmRelationType);
+                $fmStmt->bindParam(':notes', $fmNotes);
+                $fmStmt->execute();
             }
         }
         

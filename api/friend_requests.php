@@ -1,5 +1,6 @@
 <?php
 require_once 'config.php';
+require_once 'FCMService.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -18,6 +19,9 @@ if ($method === 'GET' && isset($_GET['action']) && $_GET['action'] === 'search')
     
     $searchQuery = '%' . $_GET['query'] . '%';
     
+    // On filtre les utilisateurs selon leurs paramètres de confidentialité :
+    // - si allow_search_email=0, l'utilisateur n'apparaît pas lors d'une recherche par email
+    // - si allow_search_phone=0, il n'apparaît pas lors d'une recherche par téléphone
     $query = "SELECT u.id, u.email, 
               COALESCE(NULLIF(p.first_name, ''), 'Prénom') as first_name, 
               COALESCE(NULLIF(p.last_name, ''), 'Non renseigné') as last_name, 
@@ -25,7 +29,12 @@ if ($method === 'GET' && isset($_GET['action']) && $_GET['action'] === 'search')
               FROM users u
               LEFT JOIN user_profiles p ON u.id = p.user_id
               WHERE u.id != :user_id 
-              AND (u.email LIKE :query OR p.phone LIKE :query)
+              AND (
+                  (u.email LIKE :query AND COALESCE(p.privacy_allow_search_email, 1) = 1)
+                  OR
+                  (p.phone LIKE :query AND COALESCE(p.privacy_allow_search_phone, 1) = 1)
+              )
+              AND COALESCE(p.privacy_profile_public, 1) = 1
               LIMIT 20";
     
     $stmt = $db->prepare($query);
@@ -112,6 +121,24 @@ if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'send') 
     $stmt->bindParam(':receiver_id', $receiverId);
     
     if ($stmt->execute()) {
+        // Envoyer une notification FCM au destinataire
+        try {
+            $fcmService = new FCMService();
+            $senderQuery = "SELECT u.email, COALESCE(p.first_name, '') as first_name, COALESCE(p.last_name, '') as last_name
+                            FROM users u
+                            LEFT JOIN user_profiles p ON u.id = p.user_id
+                            WHERE u.id = :user_id";
+            $senderStmt = $db->prepare($senderQuery);
+            $senderStmt->bindParam(':user_id', $userId);
+            $senderStmt->execute();
+            $sender = $senderStmt->fetch(PDO::FETCH_ASSOC);
+            if ($sender) {
+                $senderName = trim("{$sender['first_name']} {$sender['last_name']}") ?: $sender['email'];
+                $fcmService->sendFriendRequestNotification($db, $receiverId, $userId, $senderName, $sender['email']);
+            }
+        } catch (Exception $e) {
+            error_log('[FriendRequest FCM] Erreur: ' . $e->getMessage());
+        }
         sendResponse(true, 'Demande envoyée avec succès', ['id' => $requestId], 201);
     } else {
         sendResponse(false, 'Erreur lors de l\'envoi de la demande', null, 500);

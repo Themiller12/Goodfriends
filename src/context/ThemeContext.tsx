@@ -11,9 +11,17 @@ export interface Theme {
 }
 
 export const THEMES: { [key: string]: Theme } = {
+  sanctuary: {
+    id: 'sanctuary',
+    name: 'Classique',
+    primary: '#9c4e36',
+    secondary: '#006d8d',
+    accent: '#815f19',
+    background: '#fcf9f0',
+  },
   blue: {
     id: 'blue',
-    name: 'Bleu Classique',
+    name: 'Bleu Apaisant',
     primary: '#2196F3',
     secondary: '#1976D2',
     accent: '#03A9F4',

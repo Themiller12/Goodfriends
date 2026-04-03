@@ -16,18 +16,17 @@ interface VerificationScreenProps {
 }
 
 const VerificationScreen: React.FC<VerificationScreenProps> = ({navigation, route}) => {
-  const {verificationCode, email} = route.params;
+  const {email} = route.params;
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    // Afficher le code dans une alerte (simulation d'email)
     Alert.alert(
-      'Code de vérification envoyé',
-      `Un email a été envoyé à ${email}.\n\nPour cette démo, voici votre code : ${verificationCode}`,
+      'Email envoyé 📬',
+      `Un code de vérification a été envoyé à ${email}. Vérifiez votre boîte de réception (et vos spams).`,
       [{text: 'OK'}]
     );
-  }, [email, verificationCode]);
+  }, [email]);
 
   const handleVerify = async () => {
     if (code.length !== 6) {
@@ -66,10 +65,10 @@ const VerificationScreen: React.FC<VerificationScreenProps> = ({navigation, rout
   const handleResend = async () => {
     setLoading(true);
     try {
-      const newCode = await AuthService.resendVerificationCode(email);
+      await AuthService.resendVerificationCode(email);
       Alert.alert(
-        'Code renvoyé',
-        `Un nouveau code a été envoyé.\n\nPour cette démo, voici votre nouveau code : ${newCode}`
+        'Code renvoyé 📬',
+        `Un nouveau code a été envoyé à ${email}.`
       );
     } catch (error: any) {
       Alert.alert('Erreur', error.message);
