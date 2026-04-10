@@ -42,12 +42,20 @@ class GroupChatService {
       const res = await ApiClient.get<any>(EP);
       if (res.success && Array.isArray(res.data)) {
         const groups: GroupChat[] = res.data.map(this.mapGroup);
+        // Préserver les messages déjà en cache (l'endpoint /groups ne les retourne pas)
+        const existing = await this.readCache();
+        for (const g of groups) {
+          const cached = existing.find(c => c.id === g.id);
+          if (cached?.messages?.length) {
+            g.messages = cached.messages;
+          }
+        }
         await this.writeCache(groups);
         return groups;
       }
       return await this.readCache();
     } catch {
-      // API indisponible ou non dÃ©ployÃ©e â€” fallback local
+      // API indisponible ou non déployée — fallback local
       return await this.readCache();
     }
   }
@@ -160,6 +168,11 @@ class GroupChatService {
         groupId,
         text,
         senderName,
+        imageBase64,
+        imageMime,
+        replyToId,
+        replyToText,
+        replyToSenderName,
       });
       if (res.success && res.data) {
         const serverMsg = this.mapMessage(res.data);
@@ -250,7 +263,8 @@ class GroupChatService {
       return { text: 'Aucun message', time: group.createdAt };
     }
     const last = group.messages[group.messages.length - 1];
-    return { text: last.text, time: last.createdAt };
+    const text = last.imageBase64 && !last.text ? '📷 Photo' : (last.text || '📷 Photo');
+    return { text, time: last.createdAt };
   }
 
   getMembersLabel(group: GroupChat): string {

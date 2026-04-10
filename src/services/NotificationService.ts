@@ -432,6 +432,79 @@ class NotificationService {
     console.log('[NotificationService] Notification sent successfully');
   }
 
+  // Envoyer une notification groupée pour plusieurs messages du même expéditeur
+  async showGroupedMessageNotification(
+    senderName: string,
+    senderEmail: string,
+    count: number,
+    senderId?: string,
+    senderFirstName?: string,
+    senderLastName?: string,
+  ): Promise<void> {
+    const settings = await this.getSettings();
+    if (!settings.messageNotificationsEnabled) return;
+    const hasPermission = await this.requestPermissions();
+    if (!hasPermission) return;
+
+    const title = `💬 ${senderName || senderEmail}`;
+    const message = count === 1
+      ? `${count} nouveau message`
+      : `${count} nouveaux messages`;
+
+    PushNotification.localNotification({
+      channelId: 'messages-channel',
+      title,
+      message,
+      playSound: true,
+      soundName: 'default',
+      importance: 'high',
+      vibrate: true,
+      vibration: 300,
+      priority: 'high',
+      userInfo: {
+        type: 'message',
+        senderId, senderEmail, senderName,
+        senderFirstName: senderFirstName || '',
+        senderLastName: senderLastName || '',
+      },
+    });
+  }
+
+  // Envoyer une notification pour une réaction à un message
+  async showReactionNotification(
+    reactorName: string,
+    emoji: string,
+    messagePreview: string | null,
+  ): Promise<void> {
+    const settings = await this.getSettings();
+    if (!settings.messageNotificationsEnabled) return;
+    const hasPermission = await this.requestPermissions();
+    if (!hasPermission) return;
+
+    const REACTION_LABELS: Record<string, string> = {
+      love: '❤️',
+      like: '👍',
+      dislike: '👎',
+      wow: '😮',
+      angry: '😠',
+    };
+    const emojiLabel = REACTION_LABELS[emoji] ?? emoji;
+    const preview = messagePreview ? `"${messagePreview.slice(0, 50)}"` : 'votre message';
+
+    PushNotification.localNotification({
+      channelId: 'messages-channel',
+      title: '💬 Réaction',
+      message: `${reactorName} a réagi ${emojiLabel} à ${preview}`,
+      playSound: true,
+      soundName: 'default',
+      importance: 'default',
+      vibrate: true,
+      vibration: 200,
+      priority: 'default',
+      userInfo: { type: 'reaction' },
+    });
+  }
+
   // Envoyer une notification pour une nouvelle demande d'ami
   async showFriendRequestNotification(
     senderName: string,

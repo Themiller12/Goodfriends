@@ -40,10 +40,17 @@ class FirebaseService {
       this.fcmToken = token;
       console.log('[FirebaseService] FCM Token:', token);
 
-      // Enregistrer le token sur le serveur
-      await this.registerToken(token);
+      // Toujours comparer avec le token en cache — si différent, re-enregistrer
+      // (le token peut avoir été renouvelé pendant que l'app était fermée)
+      const cachedToken = await AsyncStorage.getItem('fcm_token');
+      if (token !== cachedToken) {
+        console.log('[FirebaseService] Token changé depuis la dernière session, re-enregistrement...');
+        await this.registerToken(token);
+      } else {
+        console.log('[FirebaseService] Token inchangé');
+      }
 
-      // Écouter les rafraîchissements de token
+      // Écouter les rafraîchissements de token pendant que l'app tourne
       onTokenRefresh(m, async (newToken) => {
         console.log('[FirebaseService] Token refreshed:', newToken);
         this.fcmToken = newToken;

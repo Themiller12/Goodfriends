@@ -505,6 +505,32 @@ try {
                     $insStmt->bindParam(':uid', $userId);
                     $insStmt->bindParam(':emoji', $emoji);
                     $insStmt->execute();
+
+                    // Notifier l'auteur du message (sauf si c'est lui-même qui réagit)
+                    $authorStmt = $db->prepare(
+                        'SELECT sender_id, receiver_id, message FROM messages WHERE id = :mid'
+                    );
+                    $authorStmt->execute([':mid' => $messageId]);
+                    $msgRow = $authorStmt->fetch(PDO::FETCH_ASSOC);
+                    if ($msgRow && $msgRow['sender_id'] !== $userId) {
+                        $reactorStmt = $db->prepare('SELECT first_name, last_name FROM users WHERE id = :uid');
+                        $reactorStmt->execute([':uid' => $userId]);
+                        $reactor = $reactorStmt->fetch(PDO::FETCH_ASSOC);
+                        $reactorName = trim(($reactor['first_name'] ?? '') . ' ' . ($reactor['last_name'] ?? '')) ?: "Quelqu'un";
+                        $fcm = new FCMService();
+                        $token = $fcm->getUserToken($db, $msgRow['sender_id']);
+                        if ($token) {
+                            $preview = mb_substr($msgRow['message'] ?? '', 0, 50);
+                            $fcm->sendNotification(
+                                $token,
+                                "$reactorName a réagi",
+                                $preview ? "$reactorName a réagi $emoji à \"$preview\"" : "$reactorName a réagi $emoji à votre message",
+                                ['type' => 'reaction', 'messageId' => $messageId, 'emoji' => $emoji, 'reactorId' => (string)$userId],
+                                'reaction_' . $messageId
+                            );
+                        }
+                    }
+
                     sendResponse(true, 'Réaction ajoutée', ['action' => 'added']);
                 }
 

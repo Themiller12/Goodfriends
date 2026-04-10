@@ -3,7 +3,7 @@ import {
   View,
   StyleSheet,
   FlatList,
-  Keyboard,
+  KeyboardAvoidingView,
   Platform,
   Alert,
   Image,
@@ -14,9 +14,11 @@ import {
   Animated,
   PanResponder,
   TextInput as RNTextInput,
+  Keyboard,
   Share,
   Linking,
   Text as RNText,
+  StatusBar,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Text, ActivityIndicator } from 'react-native-paper';
@@ -33,14 +35,12 @@ import OnlineStatusService from '../services/OnlineStatusService';
 import OnlineIndicator from '../components/OnlineIndicator';
 
 const REACTIONS = [
-  { key: 'love',    emoji: '❤️' },
-  { key: 'like',    emoji: '👍' },
-  { key: 'wow',     emoji: '😮' },
-  { key: 'haha',    emoji: '😂' },
-  { key: 'dislike', emoji: '👎' },
-  { key: 'angry',   emoji: '😡' },
+  { key: 'love',    icon: 'favorite',                    color: '#e53935' },
+  { key: 'like',    icon: 'thumb-up',                    color: '#1976D2' },
+  { key: 'dislike', icon: 'thumb-down',                  color: '#9E9E9E' },
+  { key: 'wow',     icon: 'sentiment-very-satisfied',    color: '#FB8C00' },
+  { key: 'angry',   icon: 'sentiment-very-dissatisfied', color: '#e53935' },
 ];
-const REACTION_EMOJI: Record<string, string> = Object.fromEntries(REACTIONS.map(r => [r.key, r.emoji]));
 
 const CACHE_SIZE = 50;
 
@@ -55,12 +55,12 @@ const SwipeableMessage: React.FC<{
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (_e, gs) =>
-        gs.dx > 5 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5,
+        gs.dx > 8 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5,
       onPanResponderGrant: () => { hasTriggered.current = false; },
       onPanResponderMove: (_e, gs) => {
         if (gs.dx > 0) {
           translateX.setValue(Math.min(gs.dx, 80));
-          if (!hasTriggered.current && gs.dx > 40) {
+          if (!hasTriggered.current && gs.dx > 60) {
             hasTriggered.current = true;
             Vibration.vibrate(40);
             onSwipeRight();
@@ -120,7 +120,7 @@ const ChatScreen: React.FC = () => {
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [currentUserId, setCurrentUserId] = useState('');
   const [lightboxUri, setLightboxUri] = useState<string | null>(null);
@@ -130,26 +130,18 @@ const ChatScreen: React.FC = () => {
   const [loadingMore, setLoadingMore] = useState(false);
   const [networkError, setNetworkError] = useState(false);
   const [isOtherUserOnline, setIsOtherUserOnline] = useState(false);
-  const [reactionPickerPos, setReactionPickerPos] = useState(300);
-  const [listReady, setListReady] = useState(false);
-
-  // Keyboard offset — animates in sync with the keyboard so the input follows it
-  const kbOffset = useRef(new Animated.Value(0)).current;
 
   const flatListRef = useRef<FlatList>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentUserIdRef = useRef('');
   const lastMessageIdRef = useRef('');
   const suppressScrollRef = useRef(false);
-  const initialScrollDoneRef = useRef(false);
-  const scrollReadyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Double-tap detection: { id, time }
   const lastTapRef = useRef<{ id: string; time: number } | null>(null);
 
   const cacheKey = `@messages_${otherUserId}`;
 
   useEffect(() => {
-    setListReady(false);
     loadCurrentUser();
     loadMessages();
     markRead();
@@ -161,22 +153,8 @@ const ChatScreen: React.FC = () => {
     return () => {
       AppState.setCurrentOpenChat(null);
       if (pollingRef.current) clearInterval(pollingRef.current);
-      if (scrollReadyTimerRef.current) clearTimeout(scrollReadyTimerRef.current);
     };
   }, [otherUserId]);
-
-  useEffect(() => {
-    const onShow = Keyboard.addListener('keyboardDidShow', e => {
-      console.log('[KB] keyboardDidShow height:', e.endCoordinates.height);
-      kbOffset.setValue(e.endCoordinates.height + 20);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 50);
-    });
-    const onHide = Keyboard.addListener('keyboardDidHide', () => {
-      console.log('[KB] keyboardDidHide');
-      kbOffset.setValue(0);
-    });
-    return () => { onShow.remove(); onHide.remove(); };
-  }, []);
 
   const loadCurrentUser = async () => {
     try {
@@ -189,24 +167,17 @@ const ChatScreen: React.FC = () => {
   };
 
   const loadMessages = async (silent = false) => {
-    let cacheShown = false;
-    console.log(`[SCROLL] loadMessages silent=${silent}`);
-
     if (!silent) {
-      // Phase 1 : afficher le cache immédiatement s'il existe
+      // Show cached data immediately
       try {
         const cached = await AsyncStorage.getItem(cacheKey);
         if (cached) {
           const parsed: Message[] = JSON.parse(cached);
-          console.log(`[SCROLL] cache hit: ${parsed.length} msgs, lastId=${parsed[parsed.length-1]?.id}`);
           setMessages(parsed);
           setHasMore(parsed.length >= CACHE_SIZE);
           lastMessageIdRef.current = parsed[parsed.length - 1]?.id ?? '';
           setLoading(false);
-          cacheShown = true;
-          // onContentSizeChange se chargera du scroll + reveal une fois le layout complet
         } else {
-          console.log('[SCROLL] no cache, showing spinner');
           setLoading(true);
         }
       } catch {
@@ -214,48 +185,42 @@ const ChatScreen: React.FC = () => {
       }
     }
 
-    // Phase 2 : rafraîchir depuis l'API en arrière-plan
     try {
       const data = await MessageService.getConversation(otherUserId);
       setNetworkError(false);
-      setHasMore(data.length >= 100);
 
-      if (silent || cacheShown) {
-        // Ajouter uniquement les nouveaux messages par rapport au cache/état actuel
+      if (silent) {
         setMessages(prev => {
           const lastId = lastMessageIdRef.current;
           if (!lastId) {
-            console.log(`[SCROLL] API: no lastId, replacing all (${data.length} msgs)`);
             lastMessageIdRef.current = data[data.length - 1]?.id ?? '';
             saveCache(data);
-            return data.slice(-CACHE_SIZE);
+            return data;
           }
           const anchorIdx = data.findIndex(m => m.id === lastId);
           const newOnes = anchorIdx >= 0 ? data.slice(anchorIdx + 1) : [];
-          console.log(`[SCROLL] API: anchorIdx=${anchorIdx}, newOnes=${newOnes.length}, listReady=${listReady}`);
           if (!newOnes.length) return prev;
           const hasIncoming = newOnes.some(m => m.senderId !== currentUserIdRef.current);
-          if (hasIncoming && silent) Vibration.vibrate([0, 80, 60, 80]);
+          if (hasIncoming) Vibration.vibrate([0, 80, 60, 80]);
           lastMessageIdRef.current = newOnes[newOnes.length - 1].id;
           const updated = [...prev, ...newOnes];
-          saveCache(updated.slice(-CACHE_SIZE));
+          const toCache = updated.slice(-CACHE_SIZE);
+          saveCache(toCache);
           if (!suppressScrollRef.current) {
             setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
           }
           return updated;
         });
       } else {
-        // Pas de cache — première ouverture : afficher les données API avec scroll initial
         const toCache = data.slice(-CACHE_SIZE);
         setMessages(toCache);
+        setHasMore(data.length >= 100);
         lastMessageIdRef.current = toCache[toCache.length - 1]?.id ?? '';
         saveCache(toCache);
-        // onContentSizeChange se chargera du scroll + reveal une fois le layout complet
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 100);
       }
     } catch {
       setNetworkError(true);
-      // Si l'API échoue mais qu'on a le cache, on reste visible
-      if (!cacheShown) setListReady(true);
     } finally {
       if (!silent) setLoading(false);
     }
@@ -284,47 +249,23 @@ const ChatScreen: React.FC = () => {
     try { await MessageService.markAsRead(otherUserId); } catch {}
   };
 
-  const pendingIds = useRef<Set<string>>(new Set());
-
-  const handleSend = () => {
-    if (!newMessage.trim()) return;
+  const handleSend = async () => {
+    if (!newMessage.trim() || sending) return;
     const text = newMessage.trim();
     const reply = replyingTo;
-    const tmpId = `tmp-${Date.now()}`;
     setNewMessage('');
     setReplyingTo(null);
-
-    // Affichage immédiat
-    const optimistic: Message = {
-      id: tmpId,
-      senderId: currentUserId,
-      receiverId: otherUserId,
-      message: text,
-      isRead: false,
-      createdAt: new Date().toISOString(),
-      reactions: [],
-      replyToId: reply?.id ?? null,
-      replyToMessage: reply?.message ?? null,
-      replyToSenderId: reply?.senderId ?? null,
-    };
-    pendingIds.current.add(tmpId);
-    setMessages(prev => [...prev, optimistic]);
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
-
-    // Envoi en arrière-plan
-    MessageService.sendMessage(otherUserId, text, reply?.id).then(sent => {
-      pendingIds.current.delete(tmpId);
+    setSending(true);
+    try {
+      const sent = await MessageService.sendMessage(otherUserId, text, reply?.id);
       setMessages(prev => {
-        const updated = prev.map(m => m.id === tmpId ? sent : m);
+        const updated = [...prev, sent];
         lastMessageIdRef.current = sent.id;
         saveCache(updated.slice(-CACHE_SIZE));
         return updated;
       });
-    }).catch((e: any) => {
-      pendingIds.current.delete(tmpId);
-      setMessages(prev => prev.filter(m => m.id !== tmpId));
-      setNewMessage(text);
-      setReplyingTo(reply);
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+    } catch (e: any) {
       const msg = e?.response?.data?.message || e?.message || "Impossible d'envoyer le message";
       if (msg.includes('supprimé') || msg.includes('ami')) {
         Alert.alert('Contact supprimé', 'La relation a été supprimée.', [
@@ -333,7 +274,9 @@ const ChatScreen: React.FC = () => {
       } else {
         Alert.alert('Erreur', msg);
       }
-    });
+    } finally {
+      setSending(false);
+    }
   };
 
   const handlePickPhoto = async () => {
@@ -344,47 +287,21 @@ const ChatScreen: React.FC = () => {
       if (result.didCancel || !result.assets?.length) return;
       const asset = result.assets[0];
       if (!asset.base64 || !asset.type) { Alert.alert('Erreur', "Impossible de lire l'image"); return; }
-
-      const reply = replyingTo;
-      const caption = newMessage.trim() || undefined;
-      const tmpId = `tmp-${Date.now()}`;
-      setReplyingTo(null);
+      setSending(true);
+      const reply = replyingTo; setReplyingTo(null);
+      const sent = await MessageService.sendPhoto(otherUserId, asset.base64, asset.type, newMessage.trim() || undefined, reply?.id);
       setNewMessage('');
-
-      // Affichage immédiat avec base64 local
-      const optimistic: Message = {
-        id: tmpId,
-        senderId: currentUserId,
-        receiverId: otherUserId,
-        message: caption ?? null,
-        photoUrl: `data:${asset.type};base64,${asset.base64}`,
-        isRead: false,
-        createdAt: new Date().toISOString(),
-        reactions: [],
-        replyToId: reply?.id ?? null,
-        replyToMessage: reply?.message ?? null,
-        replyToSenderId: reply?.senderId ?? null,
-      };
-      pendingIds.current.add(tmpId);
-      setMessages(prev => [...prev, optimistic]);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
-
-      // Envoi en arrière-plan
-      MessageService.sendPhoto(otherUserId, asset.base64, asset.type, caption, reply?.id).then(sent => {
-        pendingIds.current.delete(tmpId);
-        setMessages(prev => {
-          const updated = prev.map(m => m.id === tmpId ? sent : m);
-          lastMessageIdRef.current = sent.id;
-          saveCache(updated.slice(-CACHE_SIZE));
-          return updated;
-        });
-      }).catch((e: any) => {
-        pendingIds.current.delete(tmpId);
-        setMessages(prev => prev.filter(m => m.id !== tmpId));
-        Alert.alert('Erreur', e?.response?.data?.message || "Impossible d'envoyer la photo");
+      setMessages(prev => {
+        const updated = [...prev, sent];
+        lastMessageIdRef.current = sent.id;
+        saveCache(updated.slice(-CACHE_SIZE));
+        return updated;
       });
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
     } catch (e: any) {
-      Alert.alert('Erreur', e?.message || "Impossible d'envoyer la photo");
+      Alert.alert('Erreur', e?.response?.data?.message || "Impossible d'envoyer la photo");
+    } finally {
+      setSending(false);
     }
   };
 
@@ -499,38 +416,33 @@ const ChatScreen: React.FC = () => {
         <SwipeableMessage onSwipeRight={() => setReplyingTo(item)}>
           <TouchableOpacity
             activeOpacity={0.9}
-            onLongPress={(e) => { setReactionPickerMsg(item); setReactionPickerPos(e.nativeEvent.pageY); }}
+            onLongPress={() => setReactionPickerMsg(item)}
             onPress={() => handleDoubleTap(item)}
             delayLongPress={350}>
-            <View style={[s.bubble, isMe ? s.bubbleMe : s.bubbleOther, item.photoUrl ? s.bubblePhoto : null, item.replyToId ? s.bubbleWithQuote : null]}>
+            <View style={[s.bubble, isMe ? s.bubbleMe : s.bubbleOther, item.photoUrl ? s.bubblePhoto : null]}>
               {/* Reply quote */}
               {item.replyToId && (
-                <TouchableOpacity
-                  style={[s.replyQuote, { backgroundColor: isMe ? 'rgba(255,255,255,0.25)' : Neutral[100] }]}
-                  onPress={() => scrollToMessage(item.replyToId!)} activeOpacity={0.7}>
-                  <View style={[s.replyQuoteBar, { backgroundColor: isMe ? 'rgba(255,255,255,0.7)' : theme.primary }]} />
+                <TouchableOpacity style={s.replyQuote} onPress={() => scrollToMessage(item.replyToId!)} activeOpacity={0.7}>
+                  <View style={[s.replyQuoteBar, { backgroundColor: theme.primary }]} />
                   <View style={s.replyQuoteContent}>
-                    <RNText style={[s.replyQuoteAuthor, { color: isMe ? 'rgba(255,255,255,0.9)' : theme.primary }]}>
+                    <RNText style={[s.replyQuoteAuthor, { color: theme.primary }]}>
                       {item.replyToSenderId === currentUserId ? 'Vous' : formatUserName(otherUserFirstName, otherUserLastName, otherUserEmail)}
                     </RNText>
-                    <RNText style={[s.replyQuoteText, { color: isMe ? 'rgba(255,255,255,0.75)' : Neutral[700] }]} numberOfLines={2}>{item.replyToMessage ?? '[Photo]'}</RNText>
+                    <RNText style={s.replyQuoteText} numberOfLines={2}>{item.replyToMessage ?? '[Photo]'}</RNText>
                   </View>
                 </TouchableOpacity>
               )}
               {/* Photo */}
               {item.photoUrl && (
-                <TouchableOpacity
-                  onPress={() => setLightboxUri(item.photoUrl!)}
-                  onLongPress={(e) => { setReactionPickerMsg(item); setReactionPickerPos(e.nativeEvent.pageY); }}
-                  delayLongPress={350}>
+                <TouchableOpacity onPress={() => setLightboxUri(item.photoUrl!)}>
                   <Image source={{ uri: item.photoUrl }} style={s.photo} resizeMode="cover" />
                 </TouchableOpacity>
               )}
               {/* Text */}
-              {item.message ? renderMessageText(item.message, [s.msgText, item.photoUrl ? s.captionText : null, isMe ? { color: '#FFF' } : null]) : null}
+              {item.message ? renderMessageText(item.message, [s.msgText, item.photoUrl ? s.captionText : null]) : null}
               {/* Footer */}
               <View style={s.msgFooter}>
-                <RNText style={[s.msgTime, isMe && { color: 'rgba(255,255,255,0.7)' }]}>{formatTime(item.createdAt)}</RNText>
+                <RNText style={s.msgTime}>{formatTime(item.createdAt)}</RNText>
                 {isMe && (
                   <MaterialIcons name={item.isRead ? 'done-all' : 'done'} size={14}
                     color={item.isRead ? '#4FC3F7' : '#aaa'} style={{ marginLeft: 3 }} />
@@ -542,22 +454,50 @@ const ChatScreen: React.FC = () => {
         {/* Reactions */}
         {aggregated.length > 0 && (
           <View style={[s.reactionsRow, isMe ? s.reactionsMe : s.reactionsOther]}>
-            {aggregated.map(r => (
-              <TouchableOpacity key={r.emoji}
-                style={[s.reactionBadge, r.myReaction && { borderColor: theme.primary, backgroundColor: theme.primary + '18' }]}
-                onPress={() => handleReact(item.id, r.emoji)}>
-                <RNText style={s.reactionCount}>{REACTION_EMOJI[r.emoji] ?? r.emoji}{r.count > 1 ? ` ${r.count}` : ''}</RNText>
-              </TouchableOpacity>
-            ))}
+            {aggregated.map(r => {
+              const def = REACTIONS.find(rx => rx.key === r.emoji);
+              return (
+                <TouchableOpacity key={r.emoji}
+                  style={[s.reactionBadge, r.myReaction && { borderColor: theme.primary, backgroundColor: theme.primary + '18' }]}
+                  onPress={() => handleReact(item.id, r.emoji)}>
+                  {def ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <MaterialIcons name={def.icon as any} size={14} color={r.myReaction ? def.color : '#555'} />
+                      {r.count > 1 && <RNText style={[s.reactionCount, { marginLeft: 2 }]}>{r.count}</RNText>}
+                    </View>
+                  ) : (
+                    <RNText style={s.reactionCount}>{r.emoji}{r.count > 1 ? ` ${r.count}` : ''}</RNText>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
           </View>
         )}
       </View>
     );
   };
 
+  const headerHeight = 56 + (Platform.OS === 'ios' ? insets.top : (StatusBar.currentHeight || 0));
+
+  if (loading) {
+    return (
+      <View style={s.container}>
+        <View style={[s.header, { paddingTop: insets.top + 8 }]}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn}>
+            <MaterialIcons name="arrow-back" size={22} color="#FFF" />
+          </TouchableOpacity>
+          <Text style={s.headerName}>{formatUserName(otherUserFirstName, otherUserLastName, otherUserEmail)}</Text>
+        </View>
+        <View style={s.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.primary} />
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={s.container}>
-      {/* Header — fixed, never moves */}
+      {/* Header (outside KAV so it doesn't move) */}
       <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn}>
           <MaterialIcons name="arrow-back" size={22} color="#FFF" />
@@ -571,13 +511,11 @@ const ChatScreen: React.FC = () => {
         <OnlineIndicator isOnline={isOtherUserOnline} size={12} />
       </View>
 
-      {/* Content area — shrinks/grows with the keyboard via animated marginBottom */}
-      <Animated.View style={{ flex: 1, marginBottom: kbOffset }}>
-        {loading ? (
-          <View style={s.loadingContainer}>
-            <ActivityIndicator size="large" color={theme.primary} />
-          </View>
-        ) : (<>
+      {/* KeyboardAvoidingView wraps the messages + input */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}>
 
         <FlatList
           ref={flatListRef}
@@ -585,21 +523,9 @@ const ChatScreen: React.FC = () => {
           renderItem={renderMessage}
           keyExtractor={item => item.id}
           contentContainerStyle={[s.messagesList, { paddingBottom: 8 }]}
-          style={{ opacity: listReady ? 1 : 0 }}
           maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-          onContentSizeChange={(w, h) => {
-            console.log(`[SCROLL] onContentSizeChange h=${h} listReady=${listReady}`);
-            if (!listReady) {
-              // Garder la liste positionnée en bas à chaque rendu progressif
-              flatListRef.current?.scrollToEnd({ animated: false });
-              // Révéler seulement quand la hauteur se stabilise (150ms sans changement)
-              if (scrollReadyTimerRef.current) clearTimeout(scrollReadyTimerRef.current);
-              scrollReadyTimerRef.current = setTimeout(() => {
-                flatListRef.current?.scrollToEnd({ animated: false });
-                console.log('[SCROLL] height stable → setListReady(true)');
-                setListReady(true);
-              }, 150);
-            }
+          onContentSizeChange={() => {
+            if (!suppressScrollRef.current) flatListRef.current?.scrollToEnd({ animated: false });
           }}
           onScrollToIndexFailed={info => {
             flatListRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true });
@@ -647,8 +573,8 @@ const ChatScreen: React.FC = () => {
 
         {/* Input bar */}
         <View style={[s.inputBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
-          <TouchableOpacity onPress={handlePickPhoto} style={s.photoBtn}>
-            <MaterialIcons name="image" size={26} color={theme.primary} />
+          <TouchableOpacity onPress={handlePickPhoto} disabled={sending} style={s.photoBtn}>
+            <MaterialIcons name="image" size={26} color={sending ? Neutral[300] : theme.primary} />
           </TouchableOpacity>
           <RNTextInput
             placeholder="Votre message..."
@@ -667,8 +593,7 @@ const ChatScreen: React.FC = () => {
             <MaterialIcons name="send" size={20} color={newMessage.trim() && !sending ? '#FFF' : Neutral[400]} />
           </TouchableOpacity>
         </View>
-        </>)}
-      </Animated.View>
+      </KeyboardAvoidingView>
 
       {/* Lightbox */}
       <Modal visible={lightboxUri !== null} transparent animationType="fade" onRequestClose={() => setLightboxUri(null)}>
@@ -687,21 +612,18 @@ const ChatScreen: React.FC = () => {
       {/* Reaction picker */}
       <Modal visible={reactionPickerMsg !== null} transparent animationType="fade" onRequestClose={() => setReactionPickerMsg(null)}>
         <TouchableOpacity style={s.reactionOverlay} activeOpacity={1} onPress={() => setReactionPickerMsg(null)}>
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={() => {}}
-            style={[s.reactionPicker, { top: Math.max(60, reactionPickerPos - 70) }]}>
+          <View style={s.reactionPicker}>
             {REACTIONS.map(r => {
               const isActive = reactionPickerMsg?.reactions?.find(rx => rx.userId === currentUserId)?.emoji === r.key;
               return (
                 <TouchableOpacity key={r.key}
-                  style={[s.reactionPickerBtn, isActive && { backgroundColor: Neutral[100], borderWidth: 2, borderColor: theme.primary }]}
+                  style={[s.reactionPickerBtn, isActive && { backgroundColor: theme.background, borderWidth: 2, borderColor: theme.primary }]}
                   onPress={() => handleReact(reactionPickerMsg!.id, r.key)}>
-                  <RNText style={[s.reactionPickerEmoji, isActive && { transform: [{ scale: 1.2 }] }]}>{r.emoji}</RNText>
+                  <MaterialIcons name={r.icon as any} size={28} color={isActive ? r.color : '#555'} />
                 </TouchableOpacity>
               );
             })}
-          </TouchableOpacity>
+          </View>
         </TouchableOpacity>
       </Modal>
     </View>
@@ -764,6 +686,7 @@ const styles = (theme: any) => StyleSheet.create({
   msgWrapperOther: { alignSelf: 'flex-start' },
   bubble: {
     borderRadius: 18,
+    overflow: 'hidden',
     paddingHorizontal: 12,
     paddingVertical: 8,
     elevation: 1,
@@ -773,12 +696,12 @@ const styles = (theme: any) => StyleSheet.create({
     shadowRadius: 3,
   },
   bubbleMe: {
-    backgroundColor: theme.primary,
-    borderBottomRightRadius: 4,
+    backgroundColor: theme.primary + '22',
+    borderWidth: 1,
+    borderColor: theme.primary + '55',
   },
   bubbleOther: {
     backgroundColor: '#FFF',
-    borderBottomLeftRadius: 4,
     borderWidth: 1,
     borderColor: Neutral[200],
   },
@@ -831,16 +754,15 @@ const styles = (theme: any) => StyleSheet.create({
   reactionCount: { fontSize: 13, color: Neutral[600] },
   replyQuote: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(255,255,255,0.35)',
+    backgroundColor: 'rgba(0,0,0,0.06)',
     borderRadius: 8,
     marginBottom: 6,
     overflow: 'hidden',
   },
   replyQuoteBar: { width: 3 },
   replyQuoteContent: { flex: 1, paddingHorizontal: 8, paddingVertical: 4 },
-  replyQuoteAuthor: { fontSize: 12, fontWeight: '700', marginBottom: 1, color: Neutral[800] },
-  replyQuoteText: { fontSize: 12, color: Neutral[700] },
-  bubbleWithQuote: { minWidth: 180 },
+  replyQuoteAuthor: { fontSize: 12, fontWeight: '700', marginBottom: 1 },
+  replyQuoteText: { fontSize: 12, color: Neutral[600] },
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',
@@ -947,15 +869,11 @@ const styles = (theme: any) => StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   reactionOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center', alignItems: 'center',
   },
   reactionPicker: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
     flexDirection: 'row',
-    justifyContent: 'center',
     backgroundColor: '#FFF',
     borderRadius: 40,
     paddingHorizontal: 12,
@@ -967,14 +885,9 @@ const styles = (theme: any) => StyleSheet.create({
     shadowRadius: 8,
   },
   reactionPickerBtn: {
-    padding: 8,
+    padding: 10,
     borderRadius: 30,
     marginHorizontal: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  reactionPickerEmoji: {
-    fontSize: 26,
   },
 });
 

@@ -13,7 +13,6 @@ import {
   ScrollView,
   Platform,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -24,7 +23,6 @@ import StorageService from '../services/StorageService';
 import FriendRequestService from '../services/FriendRequestService';
 import OnlineStatusService from '../services/OnlineStatusService';
 import GroupChatService from '../services/GroupChatService';
-import CacheService from '../services/CacheService';
 import OnlineIndicator from '../components/OnlineIndicator';
 import { Contact, GroupChat, GroupMember } from '../types';
 
@@ -61,31 +59,9 @@ const ConversationsScreen: React.FC = () => {
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Pré-peupler depuis le cache AsyncStorage sans spinner
-  const loadFromCache = useCallback(async () => {
-    try {
-      const [cachedConvs, rawGroups] = await Promise.all([
-        CacheService.getCachedConversations(),
-        AsyncStorage.getItem('@group_chats_cache'),
-      ]);
-      const convs: Conversation[] = cachedConvs ?? [];
-      const groups: GroupChat[] = rawGroups ? JSON.parse(rawGroups) : [];
-      if (convs.length > 0 || groups.length > 0) {
-        const merged = buildUnified(convs, groups);
-        setUnified(merged);
-        applyFilter(merged, searchQuery);
-        setTotalUnread(convs.reduce((s, c) => s + c.unreadCount, 0));
-        setLoading(false);
-      }
-    } catch { /* ignore */ }
-  }, []);
-
   useFocusEffect(
     useCallback(() => {
-      // 1. Afficher le cache immédiatement
-      loadFromCache();
-      // 2. Rafraîchir depuis l'API en arrière-plan
-      loadAll(true);
+      loadAll();
 
       pollingRef.current = setInterval(async () => {
         loadAll(true);
@@ -276,19 +252,15 @@ const ConversationsScreen: React.FC = () => {
   const renderItem = ({ item }: { item: UnifiedItem }) => {
     if (item.kind === 'dm') {
       const c = item.conv;
-      // Fallback sur le nom enregistré dans le contact local si le profil Goodfriends est vide
-      const localContact = goodFriendsContacts.find(x => x.goodfriendsUserId === c.otherUserId);
-      const resolvedFirstName = c.otherUserFirstName || localContact?.firstName;
-      const resolvedLastName  = c.otherUserLastName  || localContact?.lastName;
-      const name = formatName(resolvedFirstName, resolvedLastName, c.otherUserEmail);
+      const name = formatName(c.otherUserFirstName, c.otherUserLastName, c.otherUserEmail);
       const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
       return (
         <TouchableOpacity
           style={[S.item, c.unreadCount > 0 && S.itemUnread]}
           onPress={() => navigation.navigate('Chat', {
             otherUserId: c.otherUserId,
-            otherUserFirstName: resolvedFirstName,
-            otherUserLastName: resolvedLastName,
+            otherUserFirstName: c.otherUserFirstName,
+            otherUserLastName: c.otherUserLastName,
             otherUserEmail: c.otherUserEmail,
           })}
           activeOpacity={0.7}>
@@ -303,7 +275,7 @@ const ConversationsScreen: React.FC = () => {
             </View>
             <View style={S.itemBottom}>
               <Text style={[S.lastMessage, c.unreadCount > 0 && S.lastMessageBold]} numberOfLines={1}>
-                {c.lastMessage ? c.lastMessage : '📷 Photo'}
+                {c.lastMessage || '…'}
               </Text>
               {c.unreadCount > 0 && (
                 <View style={S.badge}>
@@ -366,7 +338,7 @@ const ConversationsScreen: React.FC = () => {
           )}
         </View>
         <TouchableOpacity onPress={openNewConversationModal} style={S.headerBtn}>
-          <MaterialIcons name="add-comment" size={24} color="#383830" />
+          <MaterialIcons name="edit" size={22} color="#FFF" />
         </TouchableOpacity>
       </View>
 
@@ -520,70 +492,68 @@ const ConversationsScreen: React.FC = () => {
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fcf9f0',
+    backgroundColor: theme.background,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: Spacing.xl,
-    paddingTop: Platform.OS === 'android' ? 48 : 56,
-    paddingBottom: Spacing.base,
-    backgroundColor: '#fcf9f0',
+    paddingHorizontal: Spacing[4],
+    paddingTop: Platform.OS === 'ios' ? 54 : 16,
+    paddingBottom: 12,
+    backgroundColor: theme.primary,
+    ...Shadow.md,
   },
   headerContent: { flex: 1 },
   headerTitle: {
-    fontSize: 22,
+    fontSize: Typography.size.xl,
     fontWeight: '700',
-    color: '#383830',
+    color: '#FFF',
   },
   headerSubtitle: {
-    fontSize: 12,
-    color: Neutral[500],
+    fontSize: Typography.size.xs,
+    color: 'rgba(255,255,255,0.8)',
     marginTop: 2,
   },
   headerBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Neutral[100],
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Neutral[0],
-    borderRadius: Radius.lg,
-    marginHorizontal: Spacing.base,
-    marginBottom: Spacing.sm,
-    paddingHorizontal: Spacing.base,
-    paddingVertical: 10,
+    backgroundColor: theme.surface || '#fff',
+    borderRadius: Radius.md,
+    marginHorizontal: Spacing[4],
+    marginVertical: Spacing[3],
+    paddingHorizontal: Spacing[3],
+    paddingVertical: Platform.OS === 'ios' ? 10 : 6,
     ...Shadow.sm,
   },
   searchInput: {
     flex: 1,
-    fontSize: 14,
+    fontSize: Typography.size.sm,
     color: theme.text,
     padding: 0,
   },
   list: {
-    paddingHorizontal: Spacing.base,
-    paddingTop: 4,
-    paddingBottom: 96,
-    gap: 8,
+    paddingBottom: 16,
   },
   item: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: Spacing.base,
-    paddingVertical: 14,
-    backgroundColor: Neutral[0],
-    borderRadius: Radius.lg,
-    ...Shadow.sm,
+    paddingHorizontal: Spacing[4],
+    paddingVertical: Spacing[3],
+    backgroundColor: theme.surface || '#fff',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Neutral[200],
   },
   itemUnread: {
-    backgroundColor: theme.primary + '08',
+    backgroundColor: theme.primary + '10',
   },
   avatarCircle: {
     width: 48,
@@ -592,7 +562,7 @@ const styles = (theme: any) => StyleSheet.create({
     backgroundColor: theme.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: Spacing.md,
+    marginRight: Spacing[3],
   },
   avatarText: {
     color: '#FFF',
@@ -608,14 +578,14 @@ const styles = (theme: any) => StyleSheet.create({
   },
   itemName: {
     flex: 1,
-    fontSize: 15,
+    fontSize: Typography.size.md,
     fontWeight: '500',
     color: theme.text,
     marginRight: 8,
   },
   itemNameBold: { fontWeight: '700' },
   timeText: {
-    fontSize: 12,
+    fontSize: Typography.size.xs,
     color: Neutral[500],
   },
   itemBottom: {
@@ -624,7 +594,7 @@ const styles = (theme: any) => StyleSheet.create({
   },
   lastMessage: {
     flex: 1,
-    fontSize: 14,
+    fontSize: Typography.size.sm,
     color: Neutral[500],
   },
   lastMessageBold: {
@@ -656,17 +626,17 @@ const styles = (theme: any) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingTop: 80,
-    paddingHorizontal: Spacing.xl,
+    paddingHorizontal: Spacing[6],
   },
   emptyText: {
-    fontSize: 17,
+    fontSize: Typography.size.lg,
     fontWeight: '600',
     color: theme.text,
-    marginTop: Spacing.md,
-    marginBottom: Spacing.sm,
+    marginTop: Spacing[3],
+    marginBottom: Spacing[2],
   },
   emptySubtext: {
-    fontSize: 14,
+    fontSize: Typography.size.sm,
     color: Neutral[500],
     textAlign: 'center',
   },
@@ -687,39 +657,39 @@ const styles = (theme: any) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: Spacing.base,
-    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing[4],
+    paddingVertical: Spacing[3],
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Neutral[200],
   },
   modalBackBtn: { padding: 4 },
   modalTitle: {
-    fontSize: 17,
+    fontSize: Typography.size.lg,
     fontWeight: '700',
     color: theme.text,
   },
   selectionHint: {
-    fontSize: 14,
+    fontSize: Typography.size.sm,
     color: Neutral[500],
-    paddingHorizontal: Spacing.base,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.sm,
+    paddingHorizontal: Spacing[4],
+    paddingTop: Spacing[3],
+    paddingBottom: Spacing[2],
   },
   contactsList: {
     maxHeight: 380,
-    paddingHorizontal: Spacing.sm,
+    paddingHorizontal: Spacing[2],
   },
   noContactsText: {
     textAlign: 'center',
     color: Neutral[400],
-    paddingVertical: 32,
-    fontSize: 14,
+    paddingVertical: Spacing[8],
+    fontSize: Typography.size.sm,
   },
   contactItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing[3],
+    paddingVertical: Spacing[3],
     borderRadius: Radius.md,
     marginVertical: 1,
   },
@@ -733,7 +703,7 @@ const styles = (theme: any) => StyleSheet.create({
     backgroundColor: Neutral[200],
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: Spacing.md,
+    marginRight: Spacing[3],
   },
   contactAvatarText: {
     fontWeight: '700',
@@ -741,7 +711,7 @@ const styles = (theme: any) => StyleSheet.create({
     fontSize: 15,
   },
   contactName: {
-    fontSize: 15,
+    fontSize: Typography.size.md,
     color: theme.text,
     flex: 1,
   },
@@ -752,8 +722,8 @@ const styles = (theme: any) => StyleSheet.create({
     gap: 8,
     backgroundColor: theme.primary,
     borderRadius: Radius.md,
-    marginHorizontal: Spacing.base,
-    marginTop: Spacing.base,
+    marginHorizontal: Spacing[4],
+    marginTop: Spacing[4],
     paddingVertical: 14,
   },
   confirmBtnDisabled: {
@@ -762,32 +732,32 @@ const styles = (theme: any) => StyleSheet.create({
   confirmBtnText: {
     color: '#FFF',
     fontWeight: '700',
-    fontSize: 15,
+    fontSize: Typography.size.md,
   },
   groupNameStep: {
-    paddingHorizontal: Spacing.base,
-    paddingTop: Spacing.base,
+    paddingHorizontal: Spacing[4],
+    paddingTop: Spacing[4],
   },
   groupNameLabel: {
-    fontSize: 14,
+    fontSize: Typography.size.sm,
     fontWeight: '600',
     color: Neutral[600],
-    marginBottom: Spacing.sm,
+    marginBottom: Spacing[2],
   },
   groupNameInput: {
     borderWidth: 1.5,
     borderColor: Neutral[300],
     borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md,
+    paddingHorizontal: Spacing[3],
     paddingVertical: Platform.OS === 'ios' ? 12 : 8,
-    fontSize: 15,
+    fontSize: Typography.size.md,
     color: theme.text,
-    marginBottom: Spacing.md,
+    marginBottom: Spacing[3],
   },
   groupMembersHint: {
-    fontSize: 14,
+    fontSize: Typography.size.sm,
     color: Neutral[500],
-    marginBottom: Spacing.base,
+    marginBottom: Spacing[4],
   },
 });
 

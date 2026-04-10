@@ -98,103 +98,54 @@ class MessageService {
   }
 
   /**
-   * Vérifier les nouveaux messages et afficher des notifications
+   * Vérifier les nouveaux messages et afficher des notifications groupées
    */
   async checkNewMessages(): Promise<void> {
     try {
-      console.log('[MessageService] Checking new messages...');
-      
-      // Récupérer l'utilisateur actuel depuis AsyncStorage
       const userStr = await AsyncStorage.getItem('@current_user');
-      if (!userStr) {
-        console.log('[MessageService] No user logged in (@current_user not found)');
-        return;
-      }
-      
+      if (!userStr) return;
       const currentUser = JSON.parse(userStr);
       const currentUserId = currentUser.id;
-      
-      if (!currentUserId) {
-        console.log('[MessageService] No user ID found in current user object');
-        return;
-      }
-      
-      console.log(`[MessageService] Current user ID: ${currentUserId}`);
-      
+      if (!currentUserId) return;
+
       const conversations = await this.getConversations();
-      console.log(`[MessageService] Found ${conversations.length} conversations`);
-      
-      // Récupérer les IDs des messages déjà notifiés
-      const notifiedMessagesStr = await AsyncStorage.getItem('@notified_messages');
-      const notifiedMessages: string[] = notifiedMessagesStr 
-        ? JSON.parse(notifiedMessagesStr) 
-        : [];
-      
-      console.log(`[MessageService] Previously notified messages: ${notifiedMessages.length}`);
-      
-      let newNotificationsCount = 0;
-      
-      for (const conversation of conversations) {
-        if (conversation.unreadCount > 0) {
-          console.log(`[MessageService] Conversation with ${conversation.otherUserEmail} has ${conversation.unreadCount} unread messages`);
-          
-          // Ne pas notifier si cette conversation est actuellement ouverte
-          if (AppState.isChatOpen(conversation.otherUserId)) {
-            console.log(`[MessageService] Chat with ${conversation.otherUserId} is currently open, skipping notification`);
-            continue;
-          }
-          
-          try {
-            // Récupérer les messages de cette conversation
-            const messages = await this.getConversation(conversation.otherUserId);
-            
-            // Trouver les nouveaux messages non lus
-            const unreadMessages = messages.filter(
-              msg => !msg.isRead && msg.receiverId === currentUserId && !notifiedMessages.includes(msg.id)
-            );
-            
-            console.log(`[MessageService] Found ${unreadMessages.length} new unread messages to notify`);
-            
-            // Afficher une notification pour chaque nouveau message non notifié
-            for (const message of unreadMessages) {
-              const senderName = (conversation.otherUserFirstName && conversation.otherUserLastName)
-                ? `${conversation.otherUserFirstName} ${conversation.otherUserLastName}`
-                : conversation.otherUserEmail;
-              
-              console.log(`[MessageService] Showing notification for message from ${senderName}`);
-              
-              await NotificationService.showMessageNotification(
-                senderName,
-                conversation.otherUserEmail,
-                message.message ?? null,
-                conversation.otherUserId,
-                conversation.otherUserFirstName ?? undefined,
-                conversation.otherUserLastName ?? undefined,
-              );
-              
-              // Marquer comme notifié
-              notifiedMessages.push(message.id);
-              newNotificationsCount++;
-            }
-          } catch (convError) {
-            console.error(`[MessageService] Error processing conversation with ${conversation.otherUserId}:`, convError);
-            // Continue avec les autres conversations
-          }
-        }
+
+      const notifiedStr = await AsyncStorage.getItem('@notified_messages');
+      const notified: string[] = notifiedStr ? JSON.parse(notifiedStr) : [];
+
+      for (const conv of conversations) {
+        if (conv.unreadCount <= 0) continue;
+        if (AppState.isChatOpen(conv.otherUserId)) continue;
+
+        try {
+          const msgs = await this.getConversation(conv.otherUserId);
+          const newUnread = msgs.filter(
+            m => !m.isRead && m.receiverId === currentUserId && !notified.includes(m.id),
+          );
+          if (!newUnread.length) continue;
+
+          const senderName = (conv.otherUserFirstName && conv.otherUserLastName)
+            ? `${conv.otherUserFirstName} ${conv.otherUserLastName}`
+            : conv.otherUserEmail;
+
+          // Single grouped notification per conversation
+          await NotificationService.showGroupedMessageNotification(
+            senderName,
+            conv.otherUserEmail,
+            newUnread.length,
+            conv.otherUserId,
+            conv.otherUserFirstName ?? undefined,
+            conv.otherUserLastName ?? undefined,
+          );
+
+          newUnread.forEach(m => notified.push(m.id));
+        } catch {}
       }
-      
-      console.log(`[MessageService] Sent ${newNotificationsCount} new notifications`);
-      
-      // Sauvegarder la liste mise à jour des messages notifiés
-      // Garder seulement les 100 derniers pour éviter que la liste ne grossisse indéfiniment
-      const recentNotified = notifiedMessages.slice(-100);
-      await AsyncStorage.setItem('@notified_messages', JSON.stringify(recentNotified));
+
+      await AsyncStorage.setItem('@notified_messages', JSON.stringify(notified.slice(-200)));
     } catch (error: any) {
-      // Ne pas afficher d'erreur si c'est juste un problème d'authentification
-      if (error?.response?.status === 401) {
-        console.log('[MessageService] Skipping message check - user not authenticated');
-      } else {
-        console.error('[MessageService] Erreur lors de la vérification des nouveaux messages:', error);
+      if (error?.response?.status !== 401) {
+        console.error('[MessageService] checkNewMessages error:', error);
       }
     }
   }

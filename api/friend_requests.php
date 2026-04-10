@@ -302,19 +302,15 @@ if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'accept'
             $updateContact1 = "UPDATE contacts 
                               SET is_goodfriends_user = 1,
                                   goodfriends_user_id = :gf_user_id,
-                                  first_name = :first_name,
-                                  last_name = :last_name,
-                                  email = :email,
-                                  phone = :phone,
-                                  date_of_birth = :date_of_birth,
-                                  photo = :photo,
+                                  email = COALESCE(NULLIF(email, ''), :email),
+                                  phone = COALESCE(NULLIF(phone, ''), :phone),
+                                  date_of_birth = COALESCE(date_of_birth, :date_of_birth),
+                                  photo = COALESCE(NULLIF(photo, ''), :photo),
                                   updated_at = NOW()
                               WHERE id = :id";
             $stmt1 = $db->prepare($updateContact1);
             $stmt1->bindParam(':id', $contactId1);
             $stmt1->bindParam(':gf_user_id', $senderId);
-            $stmt1->bindParam(':first_name', $senderFirstName);
-            $stmt1->bindParam(':last_name', $senderLastName);
             $stmt1->bindParam(':email', $senderInfo['email']);
             $stmt1->bindParam(':phone', $senderInfo['phone']);
             $stmt1->bindParam(':date_of_birth', $senderInfo['date_of_birth']);
@@ -371,19 +367,15 @@ if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'accept'
             $updateContact2 = "UPDATE contacts 
                               SET is_goodfriends_user = 1,
                                   goodfriends_user_id = :gf_user_id,
-                                  first_name = :first_name,
-                                  last_name = :last_name,
-                                  email = :email,
-                                  phone = :phone,
-                                  date_of_birth = :date_of_birth,
-                                  photo = :photo,
+                                  email = COALESCE(NULLIF(email, ''), :email),
+                                  phone = COALESCE(NULLIF(phone, ''), :phone),
+                                  date_of_birth = COALESCE(date_of_birth, :date_of_birth),
+                                  photo = COALESCE(NULLIF(photo, ''), :photo),
                                   updated_at = NOW()
                               WHERE id = :id";
             $stmt2 = $db->prepare($updateContact2);
             $stmt2->bindParam(':id', $contactId2);
             $stmt2->bindParam(':gf_user_id', $receiverId);
-            $stmt2->bindParam(':first_name', $receiverFirstName);
-            $stmt2->bindParam(':last_name', $receiverLastName);
             $stmt2->bindParam(':email', $receiverInfo['email']);
             $stmt2->bindParam(':phone', $receiverInfo['phone']);
             $stmt2->bindParam(':date_of_birth', $receiverInfo['date_of_birth']);

@@ -158,10 +158,40 @@ class FCMService {
             return false;
         }
 
+        $result   = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        if (curl_errno($ch)) {
+            error_log('[FCMService] cURL error: ' . curl_error($ch));
+            curl_close($ch);
+            return 'error';
+        }
+
         curl_close($ch);
         error_log('[FCMService] Response (' . $httpCode . '): ' . $result);
 
-        return $httpCode === 200;
+        if ($httpCode === 200) return 'ok';
+
+        // 404 = token invalide/expiré (UNREGISTERED) — à supprimer de la DB
+        $decoded = json_decode($result, true);
+        $status  = $decoded['error']['status'] ?? '';
+        if ($httpCode === 404 && $status === 'NOT_FOUND') return 'token_invalid';
+
+        return 'error';
+    }
+
+    /**
+     * Supprimer un token FCM invalide/expiré de la DB
+     */
+    private function deleteInvalidToken($db, $token) {
+        try {
+            $stmt = $db->prepare("DELETE FROM user_fcm_tokens WHERE token = :token");
+            $stmt->bindParam(':token', $token);
+            $stmt->execute();
+            error_log("[FCMService] Token invalide supprimé: " . substr($token, 0, 20) . "...");
+        } catch (Exception $e) {
+            error_log("[FCMService] Erreur suppression token: " . $e->getMessage());
+        }
     }
 
     /**
@@ -241,7 +271,11 @@ class FCMService {
             'unreadCount'     => (string) max(1, $unreadCount),
         ];
 
-        return $this->sendNotification($token, $title, $body, $data, 'msg_' . $conversationId);
+        $result = $this->sendNotification($token, $title, $body, $data, 'msg_' . $conversationId);
+        if ($result === 'token_invalid') {
+            $this->deleteInvalidToken($db, $token);
+        }
+        return $result === 'ok';
     }
 
     /**
@@ -265,6 +299,10 @@ class FCMService {
             'senderEmail' => $senderEmail,
         ];
 
-        return $this->sendNotification($token, $title, $body, $data, 'fr_' . $senderId);
+        $result = $this->sendNotification($token, $title, $body, $data, 'fr_' . $senderId);
+        if ($result === 'token_invalid') {
+            $this->deleteInvalidToken($db, $token);
+        }
+        return $result === 'ok';
     }
 }

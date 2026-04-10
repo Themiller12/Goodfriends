@@ -14,10 +14,10 @@ import {
   Animated,
   PanResponder,
   Vibration,
-  Keyboard,
   BackHandler,
+  KeyboardAvoidingView,
+  StatusBar,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -29,14 +29,12 @@ import GroupChatService from '../services/GroupChatService';
 import AuthService from '../services/AuthService';
 
 const REACTIONS = [
-  { key: 'love',    emoji: '❤️' },
-  { key: 'like',    emoji: '👍' },
-  { key: 'wow',     emoji: '😮' },
-  { key: 'haha',    emoji: '😂' },
-  { key: 'dislike', emoji: '👎' },
-  { key: 'angry',   emoji: '😡' },
+  { key: 'love',    icon: 'favorite',                    color: '#e53935' },
+  { key: 'like',    icon: 'thumb-up',                    color: '#1976D2' },
+  { key: 'dislike', icon: 'thumb-down',                  color: '#9E9E9E' },
+  { key: 'wow',     icon: 'sentiment-very-satisfied',    color: '#FB8C00' },
+  { key: 'angry',   icon: 'sentiment-very-dissatisfied', color: '#e53935' },
 ];
-const REACTION_EMOJI: Record<string, string> = Object.fromEntries(REACTIONS.map(r => [r.key, r.emoji]));
 
 const SwipeableMessage: React.FC<{ onSwipeRight: () => void; children: React.ReactNode }> = ({ onSwipeRight, children }) => {
   const translateX = useRef(new Animated.Value(0)).current;
@@ -44,12 +42,12 @@ const SwipeableMessage: React.FC<{ onSwipeRight: () => void; children: React.Rea
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_e, gs) => gs.dx > 5 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5,
+      onMoveShouldSetPanResponder: (_e, gs) => gs.dx > 8 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5,
       onPanResponderGrant: () => { hasTriggered.current = false; },
       onPanResponderMove: (_e, gs) => {
         if (gs.dx > 0) {
           translateX.setValue(Math.min(gs.dx, 80));
-          if (!hasTriggered.current && gs.dx > 40) {
+          if (!hasTriggered.current && gs.dx > 60) {
             hasTriggered.current = true;
             Vibration.vibrate(40);
             onSwipeRight();
@@ -93,11 +91,7 @@ const GroupChatScreen: React.FC = () => {
   const [renameValue, setRenameValue] = useState('');
   const [replyingTo, setReplyingTo] = useState<GroupMessage | null>(null);
   const [reactionPickerMsg, setReactionPickerMsg] = useState<GroupMessage | null>(null);
-  const [reactionPickerPos, setReactionPickerPos] = useState(300);
   const [lightboxUri, setLightboxUri] = useState<string | null>(null);
-
-  // Keyboard offset — animates in sync with the keyboard so the input follows it
-  const kbOffset = useRef(new Animated.Value(0)).current;
 
   const flatListRef = useRef<FlatList>(null);
   const initialScrolled = useRef(false);
@@ -112,36 +106,13 @@ const GroupChatScreen: React.FC = () => {
 
   useFocusEffect(useCallback(() => {
     initialScrolled.current = false;
-    // Pré-peupler depuis le cache AsyncStorage (instantané, pas de "Chargement...")
-    AsyncStorage.getItem('@group_chats_cache').then(raw => {
-      if (!raw) return;
-      try {
-        const groups: GroupChat[] = JSON.parse(raw);
-        const cached = groups.find(g => g.id === groupId);
-        if (cached) {
-          setGroup(cached);
-          setMessages(cached.messages ?? []);
-        }
-      } catch {}
-    });
-    // Puis rafraîchir depuis l'API
     loadGroup();
+    // Poll for new messages every 5s
     const interval = setInterval(loadGroup, 5000);
     return () => clearInterval(interval);
   }, [groupId]));
 
   useEffect(() => { loadCurrentUser(); }, []);
-
-  useEffect(() => {
-    const onShow = Keyboard.addListener('keyboardDidShow', e => {
-      kbOffset.setValue(e.endCoordinates.height + 20);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 50);
-    });
-    const onHide = Keyboard.addListener('keyboardDidHide', () => {
-      kbOffset.setValue(0);
-    });
-    return () => { onShow.remove(); onHide.remove(); };
-  }, []);
 
   useEffect(() => {
     if (messages.length > 0 && !initialScrolled.current) {
@@ -177,44 +148,24 @@ const GroupChatScreen: React.FC = () => {
     }
   };
 
-  const pendingIds = useRef<Set<string>>(new Set());
-
-  const handleSend = () => {
-    if (!inputText.trim() && !replyingTo) return;
+  const handleSend = async () => {
+    if ((!inputText.trim() && !replyingTo) || sending) return;
     const text = inputText.trim();
     const reply = replyingTo;
-    const tmpId = `tmp-${Date.now()}`;
-    setInputText(''); setReplyingTo(null);
-
-    // Affichage immédiat
-    const optimistic: GroupMessage = {
-      id: tmpId,
-      senderId: myUserId,
-      senderName: myName,
-      text,
-      reactions: [],
-      createdAt: new Date().toISOString(),
-      replyToId: reply?.id,
-      replyToText: reply?.text,
-      replyToSenderName: reply?.senderName,
-    };
-    pendingIds.current.add(tmpId);
-    setMessages(prev => [...prev, optimistic]);
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
-
-    // Envoi en arrière-plan
-    GroupChatService.sendMessage(
-      groupId, text, myUserId, myName, undefined, undefined,
-      reply?.id, reply?.text, reply?.senderName,
-    ).then(msg => {
-      pendingIds.current.delete(tmpId);
-      setMessages(prev => prev.map(m => m.id === tmpId ? msg : m));
-    }).catch(() => {
-      pendingIds.current.delete(tmpId);
-      setMessages(prev => prev.filter(m => m.id !== tmpId));
-      setInputText(text); setReplyingTo(reply);
+    setInputText(''); setReplyingTo(null); setSending(true);
+    try {
+      const msg = await GroupChatService.sendMessage(
+        groupId, text, myUserId, myName, undefined, undefined,
+        reply?.id, reply?.text, reply?.senderName,
+      );
+      setMessages(prev => [...prev, msg]);
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+    } catch {
       Alert.alert('Erreur', "Impossible d'envoyer le message");
-    });
+      setInputText(text); setReplyingTo(reply);
+    } finally {
+      setSending(false);
+    }
   };
 
   const handlePickPhoto = async () => {
@@ -225,45 +176,20 @@ const GroupChatScreen: React.FC = () => {
       if (result.didCancel || !result.assets?.length) return;
       const asset = result.assets[0];
       if (!asset.base64 || !asset.type) { Alert.alert('Erreur', "Impossible de lire l'image"); return; }
-
-      const reply = replyingTo;
-      const caption = inputText.trim();
-      const tmpId = `tmp-${Date.now()}`;
-      setReplyingTo(null); setInputText('');
-
-      // Affichage immédiat avec base64 local
-      const optimistic: GroupMessage = {
-        id: tmpId,
-        senderId: myUserId,
-        senderName: myName,
-        text: caption,
-        imageBase64: asset.base64,
-        imageMime: asset.type,
-        reactions: [],
-        createdAt: new Date().toISOString(),
-        replyToId: reply?.id,
-        replyToText: reply?.text,
-        replyToSenderName: reply?.senderName,
-      };
-      pendingIds.current.add(tmpId);
-      setMessages(prev => [...prev, optimistic]);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
-
-      // Envoi en arrière-plan
-      GroupChatService.sendMessage(
-        groupId, caption, myUserId, myName,
+      setSending(true);
+      const reply = replyingTo; setReplyingTo(null);
+      const msg = await GroupChatService.sendMessage(
+        groupId, inputText.trim(), myUserId, myName,
         asset.base64, asset.type,
         reply?.id, reply?.text, reply?.senderName,
-      ).then(msg => {
-        pendingIds.current.delete(tmpId);
-        setMessages(prev => prev.map(m => m.id === tmpId ? { ...msg, imageBase64: asset.base64, imageMime: asset.type } : m));
-      }).catch(() => {
-        pendingIds.current.delete(tmpId);
-        setMessages(prev => prev.filter(m => m.id !== tmpId));
-        Alert.alert('Erreur', "Impossible d'envoyer la photo");
-      });
+      );
+      setInputText('');
+      setMessages(prev => [...prev, { ...msg, imageBase64: asset.base64, imageMime: asset.type }]);
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
     } catch {
       Alert.alert('Erreur', "Impossible d'envoyer la photo");
+    } finally {
+      setSending(false);
     }
   };
 
@@ -389,24 +315,22 @@ const GroupChatScreen: React.FC = () => {
           <SwipeableMessage onSwipeRight={() => setReplyingTo(item)}>
             <TouchableOpacity
               activeOpacity={0.85}
-              onLongPress={(e) => { setReactionPickerMsg(item); setReactionPickerPos(e.nativeEvent.pageY); }}
+              onLongPress={() => setReactionPickerMsg(item)}
               onPress={() => handleDoubleTap(item)}
               delayLongPress={350}>
-              <View style={[S.bubble, isMe ? S.bubbleMe : S.bubbleOther, item.replyToId ? S.bubbleWithQuote : null]}>
+              <View style={[S.bubble, isMe ? S.bubbleMe : S.bubbleOther]}>
                 {showSender && !isMe && (
                   <Text style={[S.senderName, { color: getColor(item.senderId) }]}>{item.senderName}</Text>
                 )}
                 {/* Reply quote */}
                 {item.replyToId && (
-                  <TouchableOpacity
-                    style={[S.replyQuote, { backgroundColor: isMe ? 'rgba(255,255,255,0.25)' : Neutral[100] }]}
-                    onPress={() => scrollToMessage(item.replyToId!)} activeOpacity={0.7}>
-                    <View style={[S.replyBar, { backgroundColor: isMe ? 'rgba(255,255,255,0.7)' : theme.primary }]} />
+                  <TouchableOpacity style={S.replyQuote} onPress={() => scrollToMessage(item.replyToId!)} activeOpacity={0.7}>
+                    <View style={[S.replyBar, { backgroundColor: isMe ? 'rgba(255,255,255,0.5)' : theme.primary }]} />
                     <View style={{ flex: 1 }}>
                       <Text style={[S.replyAuthor, { color: isMe ? 'rgba(255,255,255,0.9)' : theme.primary }]}>
                         {item.replyToSenderName === myName ? 'Vous' : item.replyToSenderName}
                       </Text>
-                      <Text style={[S.replyText, { color: isMe ? 'rgba(255,255,255,0.75)' : Neutral[700] }]} numberOfLines={2}>
+                      <Text style={[S.replyText, { color: isMe ? 'rgba(255,255,255,0.8)' : '#666' }]} numberOfLines={2}>
                         {item.replyToText || '[Photo]'}
                       </Text>
                     </View>
@@ -414,10 +338,7 @@ const GroupChatScreen: React.FC = () => {
                 )}
                 {/* Photo */}
                 {imageUri && (
-                  <TouchableOpacity
-                    onPress={() => setLightboxUri(imageUri)}
-                    onLongPress={(e) => { setReactionPickerMsg(item); setReactionPickerPos(e.nativeEvent.pageY); }}
-                    delayLongPress={350}>
+                  <TouchableOpacity onPress={() => setLightboxUri(imageUri)}>
                     <Image source={{ uri: imageUri }} style={S.messagePhoto} resizeMode="cover" />
                   </TouchableOpacity>
                 )}
@@ -432,14 +353,24 @@ const GroupChatScreen: React.FC = () => {
           </SwipeableMessage>
           {agg.length > 0 && (
             <View style={[S.reactionsRow, isMe ? S.reactionsRight : S.reactionsLeft]}>
-              {agg.map(r => (
-                <TouchableOpacity
-                  key={r.emoji}
-                  style={[S.reactionBadge, r.mine && S.myReactionBadge]}
-                  onPress={() => handleReact(item, r.emoji)}>
-                  <Text style={S.reactionText}>{REACTION_EMOJI[r.emoji] ?? r.emoji}{r.count > 1 ? ` ${r.count}` : ''}</Text>
-                </TouchableOpacity>
-              ))}
+              {agg.map(r => {
+                const def = REACTIONS.find(rx => rx.key === r.emoji);
+                return (
+                  <TouchableOpacity
+                    key={r.emoji}
+                    style={[S.reactionBadge, r.mine && S.myReactionBadge]}
+                    onPress={() => handleReact(item, r.emoji)}>
+                    {def ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <MaterialIcons name={def.icon as any} size={13} color={r.mine ? def.color : '#555'} />
+                        {r.count > 1 && <Text style={[S.reactionText, { marginLeft: 2 }]}>{r.count}</Text>}
+                      </View>
+                    ) : (
+                      <Text style={S.reactionText}>{r.emoji}{r.count > 1 ? ` ${r.count}` : ''}</Text>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           )}
         </View>
@@ -447,9 +378,19 @@ const GroupChatScreen: React.FC = () => {
     );
   };
 
+  const headerHeight = 60 + (Platform.OS === 'ios' ? insets.top : (StatusBar.currentHeight || 0));
+
+  if (!group) {
+    return (
+      <View style={[S.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <Text style={{ color: Neutral[600] }}>Chargement...</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={S.container}>
-      {/* Header — fixed, never moves */}
+      {/* Header */}
       <View style={[S.header, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={S.backBtn}>
           <MaterialIcons name="arrow-back" size={24} color="#FFF" />
@@ -459,12 +400,12 @@ const GroupChatScreen: React.FC = () => {
             <MaterialIcons name="group" size={22} color="#FFF" />
           </View>
           <View style={S.headerText}>
-            <Text style={S.headerName} numberOfLines={1}>{group?.name}</Text>
-            <Text style={S.headerSub} numberOfLines={1}>{group ? GroupChatService.getMembersLabel(group) : ''}</Text>
+            <Text style={S.headerName} numberOfLines={1}>{group.name}</Text>
+            <Text style={S.headerSub} numberOfLines={1}>{GroupChatService.getMembersLabel(group)}</Text>
           </View>
         </TouchableOpacity>
-        <TouchableOpacity style={S.menuBtn} onPress={() => Alert.alert(group?.name ?? '', undefined, [
-          { text: 'Renommer', onPress: () => { setRenameValue(group?.name ?? ''); setShowRenameModal(true); } },
+        <TouchableOpacity style={S.menuBtn} onPress={() => Alert.alert(group.name, undefined, [
+          { text: 'Renommer', onPress: () => { setRenameValue(group.name); setShowRenameModal(true); } },
           { text: 'Membres', onPress: () => setShowMembers(true) },
           { text: 'Supprimer le groupe', style: 'destructive', onPress: handleDeleteGroup },
           { text: 'Annuler', style: 'cancel' },
@@ -473,13 +414,11 @@ const GroupChatScreen: React.FC = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Content area — shrinks/grows with the keyboard via animated marginBottom */}
-      <Animated.View style={{ flex: 1, marginBottom: kbOffset }}>
-        {!group ? (
-          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            <Text style={{ color: Neutral[600] }}>Chargement...</Text>
-          </View>
-        ) : (<>
+      {/* KeyboardAvoidingView wraps messages + input */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}>
 
         <FlatList
           ref={flatListRef}
@@ -518,8 +457,8 @@ const GroupChatScreen: React.FC = () => {
 
         {/* Input bar */}
         <View style={[S.inputBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
-          <TouchableOpacity onPress={handlePickPhoto} style={S.photoBtn}>
-            <MaterialIcons name="image" size={24} color={theme.primary} />
+          <TouchableOpacity onPress={handlePickPhoto} disabled={sending} style={S.photoBtn}>
+            <MaterialIcons name="image" size={24} color={sending ? Neutral[300] : theme.primary} />
           </TouchableOpacity>
           <TextInput
             style={S.input}
@@ -529,30 +468,29 @@ const GroupChatScreen: React.FC = () => {
             onChangeText={setInputText}
             multiline
             maxLength={2000}
-            editable
+            editable={!sending}
           />
           <TouchableOpacity
-            style={[S.sendBtn, (!inputText.trim() && !replyingTo) && S.sendBtnDisabled]}
+            style={[S.sendBtn, ((!inputText.trim() && !replyingTo) || sending) && S.sendBtnDisabled]}
             onPress={handleSend}
-            disabled={!inputText.trim() && !replyingTo}>
+            disabled={(!inputText.trim() && !replyingTo) || sending}>
             <MaterialIcons name="send" size={22} color="#FFF" />
           </TouchableOpacity>
         </View>
-        </>)}
-      </Animated.View>
+      </KeyboardAvoidingView>
 
       {/* Members modal */}
       <Modal visible={showMembers} animationType="slide" transparent onRequestClose={() => setShowMembers(false)}>
         <View style={S.modalOverlay}>
           <View style={S.modalContent}>
             <View style={S.modalHeader}>
-              <Text style={S.modalTitle}>Membres ({group?.members?.length ?? 0})</Text>
+              <Text style={S.modalTitle}>Membres ({group.members.length})</Text>
               <TouchableOpacity onPress={() => setShowMembers(false)}>
                 <MaterialIcons name="close" size={22} color={Neutral[500]} />
               </TouchableOpacity>
             </View>
             <ScrollView>
-              {(group?.members ?? []).map((member, idx) => (
+              {group.members.map((member, idx) => (
                 <View key={member.userId || member.contactId || `mbr-${idx}`} style={S.memberRow}>
                   <View style={[S.memberAvatar, { backgroundColor: getColor(member.userId || member.contactId) }]}>
                     <Text style={S.memberAvatarText}>{getInitials(member)}</Text>
@@ -603,10 +541,7 @@ const GroupChatScreen: React.FC = () => {
       {/* Reaction picker */}
       <Modal visible={reactionPickerMsg !== null} transparent animationType="fade" onRequestClose={() => setReactionPickerMsg(null)}>
         <TouchableOpacity style={S.reactionOverlay} activeOpacity={1} onPress={() => setReactionPickerMsg(null)}>
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={() => {}}
-            style={[S.reactionPicker, { top: Math.max(60, reactionPickerPos - 70) }]}>
+          <View style={S.reactionPicker}>
             {REACTIONS.map(r => {
               const mine = reactionPickerMsg?.reactions?.find(x => x.userId === myUserId)?.emoji === r.key;
               return (
@@ -614,7 +549,7 @@ const GroupChatScreen: React.FC = () => {
                   key={r.key}
                   style={[S.reactionPickerBtn, mine && S.reactionPickerBtnActive]}
                   onPress={() => reactionPickerMsg && handleReact(reactionPickerMsg, r.key)}>
-                  <Text style={[S.reactionPickerEmoji, mine && { transform: [{ scale: 1.2 }] }]}>{r.emoji}</Text>
+                  <MaterialIcons name={r.icon as any} size={26} color={mine ? r.color : '#555'} />
                 </TouchableOpacity>
               );
             })}
@@ -635,7 +570,7 @@ const GroupChatScreen: React.FC = () => {
                 <MaterialIcons name="delete-outline" size={26} color="#e53935" />
               </TouchableOpacity>
             )}
-          </TouchableOpacity>
+          </View>
         </TouchableOpacity>
       </Modal>
     </View>
@@ -705,13 +640,12 @@ const styles = (theme: any) => StyleSheet.create({
   bubbleTimeOther: { color: Neutral[400], textAlign: 'right' },
   replyQuote: {
     flexDirection: 'row', borderRadius: 6, marginBottom: 6,
-    overflow: 'hidden',
+    overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.08)',
     paddingVertical: 4, paddingRight: 8,
   },
   replyBar: { width: 3, marginRight: 6 },
   replyAuthor: { fontSize: 11, fontWeight: '700', marginBottom: 1 },
   replyText: { fontSize: 12, lineHeight: 16 },
-  bubbleWithQuote: { minWidth: 180 },
   messagePhoto: { width: 200, height: 150, borderRadius: 8, marginBottom: 4 },
   reactionsRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 2, gap: 4 },
   reactionsRight: { justifyContent: 'flex-end' },
@@ -809,27 +743,17 @@ const styles = (theme: any) => StyleSheet.create({
     position: 'absolute', top: 48, right: 20,
     backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20, padding: 8,
   },
-  reactionOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)' },
+  reactionOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', alignItems: 'center' },
   reactionPicker: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    backgroundColor: '#FFF',
-    borderRadius: 40,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    elevation: 12,
-    shadowColor: '#000',
+    flexDirection: 'row', backgroundColor: '#FFF',
+    borderRadius: 40, paddingHorizontal: 10, paddingVertical: 10,
+    elevation: 12, shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
+    shadowOpacity: 0.3, shadowRadius: 8,
     gap: 4,
   },
   reactionPickerBtn: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
   reactionPickerBtnActive: { backgroundColor: Neutral[100] },
-  reactionPickerEmoji: { fontSize: 26 },
 });
 
 export default GroupChatScreen;
