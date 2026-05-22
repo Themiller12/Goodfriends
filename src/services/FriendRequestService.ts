@@ -165,6 +165,18 @@ class FriendRequestService {
       console.log('Skipping friend request check - user may not be logged in');
     }
   }
+
+  /**
+   * Récupérer la liste des IDs des amis mutuels acceptés
+   */
+  async getMutualFriendIds(): Promise<string[]> {
+    try {
+      const response = await ApiClient.get('/friend_requests.php?action=friends') as any;
+      return response.data ?? [];
+    } catch {
+      return [];
+    }
+  }
 }
 
 export default new FriendRequestService();

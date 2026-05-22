@@ -21,6 +21,7 @@ import FriendRequestService from './src/services/FriendRequestService';
 import AuthService from './src/services/AuthService';
 import FirebaseService from './src/services/FirebaseService';
 import {ThemeProvider} from './src/context/ThemeContext';
+import {KeyboardProvider} from 'react-native-keyboard-controller';
 
 function App(): React.JSX.Element {
   const navigationRef = useRef<NavigationContainerRef<any>>(null);
@@ -145,8 +146,10 @@ function App(): React.JSX.Element {
     <ThemeProvider>
       <GestureHandlerRootView style={{flex: 1}}>
         <SafeAreaProvider>
-          <StatusBar barStyle="light-content" backgroundColor="#2196F3" />
-          <AppNavigator ref={navigationRef} onReady={handleNavigatorReady} />
+          <KeyboardProvider>
+            <StatusBar barStyle="light-content" backgroundColor="#2196F3" />
+            <AppNavigator ref={navigationRef} onReady={handleNavigatorReady} />
+          </KeyboardProvider>
         </SafeAreaProvider>
       </GestureHandlerRootView>
     </ThemeProvider>

@@ -34,6 +34,7 @@ export interface Conversation {
   lastMessage: string;
   lastMessageTime: string;
   unreadCount: number;
+  isMutual: boolean;
 }
 
 class MessageService {
@@ -78,6 +79,18 @@ class MessageService {
     } catch (error) {
       console.error('Erreur lors de l\'envoi de la photo:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Vérifier si deux utilisateurs sont toujours amis mutuels
+   */
+  async checkFriendship(otherUserId: string): Promise<boolean> {
+    try {
+      const response = await ApiClient.get(`/messages.php?action=check-friendship&otherUserId=${otherUserId}`) as any;
+      return response.data?.isMutual ?? true;
+    } catch {
+      return true; // fail-open: allow sending if check fails
     }
   }
 

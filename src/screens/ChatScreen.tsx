@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   StyleSheet,
   FlatList,
-  Keyboard,
   Platform,
   Alert,
   Image,
@@ -24,11 +23,13 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { Neutral, Spacing, Radius, Typography } from '../theme/designSystem';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { KeyboardAvoidingView, KeyboardEvents } from 'react-native-keyboard-controller';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { useTheme } from '../context/ThemeContext';
 import MessageService, { Message, MessageReaction } from '../services/MessageService';
 import AuthService from '../services/AuthService';
 import AppState from '../services/AppState';
+import StorageService from '../services/StorageService';
 import OnlineStatusService from '../services/OnlineStatusService';
 import OnlineIndicator from '../components/OnlineIndicator';
 
@@ -132,9 +133,8 @@ const ChatScreen: React.FC = () => {
   const [isOtherUserOnline, setIsOtherUserOnline] = useState(false);
   const [reactionPickerPos, setReactionPickerPos] = useState(300);
   const [listReady, setListReady] = useState(false);
-
-  // Keyboard offset — animates in sync with the keyboard so the input follows it
-  const kbOffset = useRef(new Animated.Value(0)).current;
+  const [isMutual, setIsMutual] = useState(true);
+  const [localContactId, setLocalContactId] = useState<string | null>(null);
 
   const flatListRef = useRef<FlatList>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -143,13 +143,30 @@ const ChatScreen: React.FC = () => {
   const suppressScrollRef = useRef(false);
   const initialScrollDoneRef = useRef(false);
   const scrollReadyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastFriendCheckRef = useRef(0);
   // Double-tap detection: { id, time }
   const lastTapRef = useRef<{ id: string; time: number } | null>(null);
+
+  // Defer scrollToEnd until keyboard animation completes to avoid jank
+  const kbAnimatingRef = useRef(false);
+  const pendingScrollRef = useRef(false);
+  const safeScrollToEnd = useCallback((animated = true) => {
+    if (kbAnimatingRef.current) {
+      pendingScrollRef.current = true;
+    } else {
+      flatListRef.current?.scrollToEnd({ animated });
+    }
+  }, []);
 
   const cacheKey = `@messages_${otherUserId}`;
 
   useEffect(() => {
     setListReady(false);
+    setLocalContactId(null);
+    StorageService.getContacts().then(contacts => {
+      const found = contacts.find(c => c.goodfriendsUserId === otherUserId);
+      if (found) setLocalContactId(found.id);
+    }).catch(() => {});
     loadCurrentUser();
     loadMessages();
     markRead();
@@ -166,17 +183,25 @@ const ChatScreen: React.FC = () => {
   }, [otherUserId]);
 
   useEffect(() => {
-    const onShow = Keyboard.addListener('keyboardDidShow', e => {
-      console.log('[KB] keyboardDidShow height:', e.endCoordinates.height);
-      kbOffset.setValue(e.endCoordinates.height + 20);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 50);
+    const willShow = KeyboardEvents.addListener('keyboardWillShow', () => { kbAnimatingRef.current = true; });
+    const didShow  = KeyboardEvents.addListener('keyboardDidShow',  () => {
+      kbAnimatingRef.current = false;
+      pendingScrollRef.current = false;
+      // Toujours scroller en bas quand le clavier est ouvert
+      flatListRef.current?.scrollToEnd({ animated: false });
     });
-    const onHide = Keyboard.addListener('keyboardDidHide', () => {
-      console.log('[KB] keyboardDidHide');
-      kbOffset.setValue(0);
-    });
-    return () => { onShow.remove(); onHide.remove(); };
+    const willHide = KeyboardEvents.addListener('keyboardWillHide', () => { kbAnimatingRef.current = true; });
+    const didHide  = KeyboardEvents.addListener('keyboardDidHide',  () => { kbAnimatingRef.current = false; });
+    return () => { willShow.remove(); didShow.remove(); willHide.remove(); didHide.remove(); };
   }, []);
+
+  // Scroll to end as soon as the list becomes visible (listReady: false → true)
+  // Calling scrollToEnd while opacity=0 is a no-op on Android, so we do it here.
+  useEffect(() => {
+    if (listReady) {
+      flatListRef.current?.scrollToEnd({ animated: false });
+    }
+  }, [listReady]);
 
   const loadCurrentUser = async () => {
     try {
@@ -191,6 +216,13 @@ const ChatScreen: React.FC = () => {
   const loadMessages = async (silent = false) => {
     let cacheShown = false;
     console.log(`[SCROLL] loadMessages silent=${silent}`);
+
+    // Vérifier le statut d'amitié : toujours à la première charge, puis toutes les 30s
+    const now = Date.now();
+    if (!silent || now - lastFriendCheckRef.current > 30000) {
+      lastFriendCheckRef.current = now;
+      MessageService.checkFriendship(otherUserId).then(mutual => setIsMutual(mutual));
+    }
 
     if (!silent) {
       // Phase 1 : afficher le cache immédiatement s'il existe
@@ -230,17 +262,47 @@ const ChatScreen: React.FC = () => {
             saveCache(data);
             return data.slice(-CACHE_SIZE);
           }
+
+          // Map rapide pour les mises à jour de réactions sur messages existants
+          const dataMap = new Map(data.map(d => [d.id, d]));
+
           const anchorIdx = data.findIndex(m => m.id === lastId);
           const newOnes = anchorIdx >= 0 ? data.slice(anchorIdx + 1) : [];
           console.log(`[SCROLL] API: anchorIdx=${anchorIdx}, newOnes=${newOnes.length}, listReady=${listReady}`);
-          if (!newOnes.length) return prev;
+
+          // Supprimer les messages optimistes remplacés par leur vrai équivalent serveur
+          // (évite les doublons quand le poll arrive avant le callback de sendMessage)
+          const myNewOnes = newOnes.filter(n => n.senderId === currentUserIdRef.current);
+          const withoutDupes = prev.filter(m => {
+            if (!pendingIds.current.has(m.id)) return true;
+            return !myNewOnes.some(
+              n => n.message === m.message && (n.photoUrl ?? null) === (m.photoUrl ?? null),
+            );
+          });
+
+          // Mettre à jour les réactions sur les messages existants depuis les données fraîches
+          const withUpdatedReactions = withoutDupes.map(m => {
+            const fresh = dataMap.get(m.id);
+            if (!fresh) return m;
+            if (JSON.stringify(fresh.reactions) !== JSON.stringify(m.reactions)) {
+              return { ...m, reactions: fresh.reactions };
+            }
+            return m;
+          });
+
+          if (!newOnes.length) {
+            // Pas de nouveaux messages, retourner seulement si les réactions ont changé
+            const changed = withUpdatedReactions.some((m, i) => m !== withoutDupes[i]);
+            return changed ? withUpdatedReactions : prev;
+          }
+
           const hasIncoming = newOnes.some(m => m.senderId !== currentUserIdRef.current);
           if (hasIncoming && silent) Vibration.vibrate([0, 80, 60, 80]);
           lastMessageIdRef.current = newOnes[newOnes.length - 1].id;
-          const updated = [...prev, ...newOnes];
+          const updated = [...withUpdatedReactions, ...newOnes];
           saveCache(updated.slice(-CACHE_SIZE));
           if (!suppressScrollRef.current) {
-            setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+            setTimeout(() => safeScrollToEnd(true), 80);
           }
           return updated;
         });
@@ -309,7 +371,7 @@ const ChatScreen: React.FC = () => {
     };
     pendingIds.current.add(tmpId);
     setMessages(prev => [...prev, optimistic]);
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+    setTimeout(() => safeScrollToEnd(true), 50);
 
     // Envoi en arrière-plan
     MessageService.sendMessage(otherUserId, text, reply?.id).then(sent => {
@@ -367,7 +429,7 @@ const ChatScreen: React.FC = () => {
       };
       pendingIds.current.add(tmpId);
       setMessages(prev => [...prev, optimistic]);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+      setTimeout(() => safeScrollToEnd(true), 50);
 
       // Envoi en arrière-plan
       MessageService.sendPhoto(otherUserId, asset.base64, asset.type, caption, reply?.id).then(sent => {
@@ -562,17 +624,20 @@ const ChatScreen: React.FC = () => {
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn}>
           <MaterialIcons name="arrow-back" size={22} color="#FFF" />
         </TouchableOpacity>
-        <View style={{ flex: 1 }}>
+        <TouchableOpacity
+          style={{ flex: 1 }}
+          onPress={() => localContactId && navigation.navigate('ContactProfile', { contactId: localContactId })}
+          activeOpacity={localContactId ? 0.7 : 1}>
           <Text style={s.headerName} numberOfLines={1}>
             {formatUserName(otherUserFirstName, otherUserLastName, otherUserEmail)}
           </Text>
           {isOtherUserOnline && <RNText style={s.headerOnline}>● En ligne</RNText>}
-        </View>
+        </TouchableOpacity>
         <OnlineIndicator isOnline={isOtherUserOnline} size={12} />
       </View>
 
-      {/* Content area — shrinks/grows with the keyboard via animated marginBottom */}
-      <Animated.View style={{ flex: 1, marginBottom: kbOffset }}>
+      {/* Content area — keyboard handled by KeyboardAvoidingView */}
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
         {loading ? (
           <View style={s.loadingContainer}>
             <ActivityIndicator size="large" color={theme.primary} />
@@ -587,16 +652,12 @@ const ChatScreen: React.FC = () => {
           contentContainerStyle={[s.messagesList, { paddingBottom: 8 }]}
           style={{ opacity: listReady ? 1 : 0 }}
           maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-          onContentSizeChange={(w, h) => {
-            console.log(`[SCROLL] onContentSizeChange h=${h} listReady=${listReady}`);
+          onContentSizeChange={(_w, _h) => {
             if (!listReady) {
-              // Garder la liste positionnée en bas à chaque rendu progressif
-              flatListRef.current?.scrollToEnd({ animated: false });
-              // Révéler seulement quand la hauteur se stabilise (150ms sans changement)
+              // Ne pas scroller ici (liste invisible, scrollToEnd ignoré par Android)
+              // Juste déclencher setListReady après stabilisation
               if (scrollReadyTimerRef.current) clearTimeout(scrollReadyTimerRef.current);
               scrollReadyTimerRef.current = setTimeout(() => {
-                flatListRef.current?.scrollToEnd({ animated: false });
-                console.log('[SCROLL] height stable → setListReady(true)');
                 setListReady(true);
               }, 150);
             }
@@ -646,7 +707,8 @@ const ChatScreen: React.FC = () => {
         )}
 
         {/* Input bar */}
-        <View style={[s.inputBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+        {isMutual ? (
+        <View style={[s.inputBar, { paddingBottom: insets.bottom + 8 }]}>
           <TouchableOpacity onPress={handlePickPhoto} style={s.photoBtn}>
             <MaterialIcons name="image" size={26} color={theme.primary} />
           </TouchableOpacity>
@@ -667,8 +729,14 @@ const ChatScreen: React.FC = () => {
             <MaterialIcons name="send" size={20} color={newMessage.trim() && !sending ? '#FFF' : Neutral[400]} />
           </TouchableOpacity>
         </View>
+        ) : (
+        <View style={[s.inputBar, s.inputBarBlocked, { paddingBottom: insets.bottom + 8 }]}>
+          <MaterialIcons name="block" size={18} color={Neutral[400]} style={{ marginRight: 8 }} />
+          <RNText style={s.inputBlockedText}>Vous ne pouvez plus envoyer de message à ce contact</RNText>
+        </View>
+        )}
         </>)}
-      </Animated.View>
+      </KeyboardAvoidingView>
 
       {/* Lightbox */}
       <Modal visible={lightboxUri !== null} transparent animationType="fade" onRequestClose={() => setLightboxUri(null)}>
@@ -854,6 +922,18 @@ const styles = (theme: any) => StyleSheet.create({
     shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.06,
     shadowRadius: 4,
+  },
+  inputBarBlocked: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    backgroundColor: Neutral[50],
+  },
+  inputBlockedText: {
+    flex: 1,
+    color: Neutral[400],
+    fontSize: 13,
+    fontStyle: 'italic',
   },
   photoBtn: {
     width: 42,

@@ -190,24 +190,47 @@ class GroupChatService {
     return msg;
   }
 
-  async reactToMessage(groupId: string, messageId: string, userId: string, emoji: string): Promise<void> {
+  async reactToMessage(groupId: string, messageId: string, userId: string, emoji: string): Promise<GroupMessageReaction[] | null> {
+    // Optimistic local cache update
     const cache = await this.readCache();
     const gIdx = cache.findIndex(g => g.id === groupId);
-    if (gIdx === -1) return;
-    const mIdx = cache[gIdx].messages.findIndex(m => m.id === messageId);
-    if (mIdx === -1) return;
-    const msg = cache[gIdx].messages[mIdx];
-    const reactions = [...(msg.reactions ?? [])];
-    const existing = reactions.findIndex(r => r.userId === userId && r.emoji === emoji);
-    if (existing !== -1) {
-      reactions.splice(existing, 1);
-      cache[gIdx].messages[mIdx] = { ...msg, reactions };
-    } else {
-      const filtered = reactions.filter(r => r.userId !== userId);
-      filtered.push({ userId, emoji });
-      cache[gIdx].messages[mIdx] = { ...msg, reactions: filtered };
+    if (gIdx !== -1) {
+      const mIdx = cache[gIdx].messages.findIndex(m => m.id === messageId);
+      if (mIdx !== -1) {
+        const msg = cache[gIdx].messages[mIdx];
+        const reactions = [...(msg.reactions ?? [])];
+        const existing = reactions.findIndex(r => r.userId === userId && r.emoji === emoji);
+        if (existing !== -1) {
+          reactions.splice(existing, 1);
+          cache[gIdx].messages[mIdx] = { ...msg, reactions };
+        } else {
+          const filtered = reactions.filter(r => r.userId !== userId);
+          filtered.push({ userId, emoji });
+          cache[gIdx].messages[mIdx] = { ...msg, reactions: filtered };
+        }
+        await this.writeCache(cache);
+      }
     }
-    await this.writeCache(cache);
+
+    // Persist to server and return authoritative reactions
+    try {
+      const res = await ApiClient.post<any>(`${EP}?action=react`, { messageId, emoji }) as any;
+      const serverReactions: GroupMessageReaction[] = res.data?.reactions ?? [];
+
+      // Update cache with server's authoritative list
+      const freshCache = await this.readCache();
+      const gi = freshCache.findIndex(g => g.id === groupId);
+      if (gi !== -1) {
+        const mi = freshCache[gi].messages.findIndex(m => m.id === messageId);
+        if (mi !== -1) {
+          freshCache[gi].messages[mi] = { ...freshCache[gi].messages[mi], reactions: serverReactions };
+          await this.writeCache(freshCache);
+        }
+      }
+      return serverReactions;
+    } catch {
+      return null; // fail silently; optimistic update already applied
+    }
   }
 
   async deleteMessage(groupId: string, messageId: string): Promise<void> {

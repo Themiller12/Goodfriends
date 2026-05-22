@@ -14,13 +14,14 @@ import {
   Animated,
   PanResponder,
   Vibration,
-  Keyboard,
   BackHandler,
+  KeyboardAvoidingView as RNKeyboardAvoidingView,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { KeyboardAvoidingView, KeyboardEvents } from 'react-native-keyboard-controller';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { useTheme } from '../context/ThemeContext';
 import { Neutral, Spacing, Radius } from '../theme/designSystem';
@@ -96,13 +97,21 @@ const GroupChatScreen: React.FC = () => {
   const [reactionPickerPos, setReactionPickerPos] = useState(300);
   const [lightboxUri, setLightboxUri] = useState<string | null>(null);
 
-  // Keyboard offset — animates in sync with the keyboard so the input follows it
-  const kbOffset = useRef(new Animated.Value(0)).current;
-
   const flatListRef = useRef<FlatList>(null);
   const initialScrolled = useRef(false);
   // Double-tap detection
   const lastTapRef = useRef<{ id: string; time: number } | null>(null);
+
+  // Defer scrollToEnd until keyboard animation completes to avoid jank
+  const kbAnimatingRef = useRef(false);
+  const pendingScrollRef = useRef(false);
+  const safeScrollToEnd = useCallback((animated = true) => {
+    if (kbAnimatingRef.current) {
+      pendingScrollRef.current = true;
+    } else {
+      flatListRef.current?.scrollToEnd({ animated });
+    }
+  }, []);
 
   // Back button (Android)
   useFocusEffect(useCallback(() => {
@@ -121,6 +130,14 @@ const GroupChatScreen: React.FC = () => {
         if (cached) {
           setGroup(cached);
           setMessages(cached.messages ?? []);
+          // Scroller directement après le chargement du cache
+          // (useEffect[messages.length] ne se redéclenche pas si la longueur est inchangée)
+          if ((cached.messages?.length ?? 0) > 0) {
+            setTimeout(() => {
+              flatListRef.current?.scrollToEnd({ animated: false });
+              initialScrolled.current = true;
+            }, 200);
+          }
         }
       } catch {}
     });
@@ -133,14 +150,16 @@ const GroupChatScreen: React.FC = () => {
   useEffect(() => { loadCurrentUser(); }, []);
 
   useEffect(() => {
-    const onShow = Keyboard.addListener('keyboardDidShow', e => {
-      kbOffset.setValue(e.endCoordinates.height + 20);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 50);
+    const willShow = KeyboardEvents.addListener('keyboardWillShow', () => { kbAnimatingRef.current = true; });
+    const didShow  = KeyboardEvents.addListener('keyboardDidShow',  () => {
+      kbAnimatingRef.current = false;
+      pendingScrollRef.current = false;
+      // Toujours scroller en bas quand le clavier est ouvert
+      flatListRef.current?.scrollToEnd({ animated: false });
     });
-    const onHide = Keyboard.addListener('keyboardDidHide', () => {
-      kbOffset.setValue(0);
-    });
-    return () => { onShow.remove(); onHide.remove(); };
+    const willHide = KeyboardEvents.addListener('keyboardWillHide', () => { kbAnimatingRef.current = true; });
+    const didHide  = KeyboardEvents.addListener('keyboardDidHide',  () => { kbAnimatingRef.current = false; });
+    return () => { willShow.remove(); didShow.remove(); willHide.remove(); didHide.remove(); };
   }, []);
 
   useEffect(() => {
@@ -148,7 +167,7 @@ const GroupChatScreen: React.FC = () => {
       const t = setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: false });
         initialScrolled.current = true;
-      }, 150);
+      }, 200);
       return () => clearTimeout(t);
     }
   }, [messages.length]);
@@ -168,11 +187,37 @@ const GroupChatScreen: React.FC = () => {
     if (g) {
       setGroup(g);
       setMessages(prev => {
-        // Only update if there are new messages (avoid re-render jitter)
-        if (prev.length !== g.messages.length) {
-          return [...g.messages];
+        const freshMap = new Map(g.messages.map(m => [m.id, m]));
+
+        // Supprimer les messages optimistes remplacés par leur vrai équivalent serveur
+        const myNewFromServer = g.messages.filter(m => m.senderId === myUserId);
+        const withoutDupes = prev.filter(m => {
+          if (!pendingIds.current.has(m.id)) return true;
+          return !myNewFromServer.some(
+            n => n.text === m.text && (n.imageBase64 ?? null) === (m.imageBase64 ?? null),
+          );
+        });
+
+        // Mettre à jour les réactions sur les messages existants
+        const withUpdatedReactions = withoutDupes.map(m => {
+          const fresh = freshMap.get(m.id);
+          if (!fresh) return m;
+          if (JSON.stringify(fresh.reactions) !== JSON.stringify(m.reactions)) {
+            return { ...m, reactions: fresh.reactions };
+          }
+          return m;
+        });
+
+        // Ajouter les nouveaux messages
+        const existingIds = new Set(withUpdatedReactions.map(m => m.id));
+        const newOnes = g.messages.filter(m => !existingIds.has(m.id));
+
+        if (!newOnes.length) {
+          const changed = withUpdatedReactions.some((m, i) => m !== withoutDupes[i]);
+          return changed ? withUpdatedReactions : prev;
         }
-        return prev;
+
+        return [...withUpdatedReactions, ...newOnes];
       });
     }
   };
@@ -200,7 +245,7 @@ const GroupChatScreen: React.FC = () => {
     };
     pendingIds.current.add(tmpId);
     setMessages(prev => [...prev, optimistic]);
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+    setTimeout(() => safeScrollToEnd(true), 50);
 
     // Envoi en arrière-plan
     GroupChatService.sendMessage(
@@ -247,7 +292,7 @@ const GroupChatScreen: React.FC = () => {
       };
       pendingIds.current.add(tmpId);
       setMessages(prev => [...prev, optimistic]);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+      setTimeout(() => safeScrollToEnd(true), 50);
 
       // Envoi en arrière-plan
       GroupChatService.sendMessage(
@@ -282,6 +327,7 @@ const GroupChatScreen: React.FC = () => {
 
   const handleReact = async (msg: GroupMessage, emoji: string) => {
     setReactionPickerMsg(null);
+    // Optimistic UI update
     setMessages(prev => prev.map(m => {
       if (m.id !== msg.id) return m;
       const reactions = [...(m.reactions ?? [])];
@@ -294,7 +340,13 @@ const GroupChatScreen: React.FC = () => {
       filtered.push({ userId: myUserId, emoji });
       return { ...m, reactions: filtered };
     }));
-    await GroupChatService.reactToMessage(groupId, msg.id, myUserId, emoji);
+    const serverReactions = await GroupChatService.reactToMessage(groupId, msg.id, myUserId, emoji);
+    // Reconcile with server's authoritative list
+    if (serverReactions !== null) {
+      setMessages(prev => prev.map(m =>
+        m.id !== msg.id ? m : { ...m, reactions: serverReactions }
+      ));
+    }
   };
 
   const handleDoubleTap = (item: GroupMessage) => {
@@ -473,8 +525,8 @@ const GroupChatScreen: React.FC = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Content area — shrinks/grows with the keyboard via animated marginBottom */}
-      <Animated.View style={{ flex: 1, marginBottom: kbOffset }}>
+      {/* Content area — keyboard handled by KeyboardAvoidingView */}
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
         {!group ? (
           <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
             <Text style={{ color: Neutral[600] }}>Chargement...</Text>
@@ -517,7 +569,7 @@ const GroupChatScreen: React.FC = () => {
         )}
 
         {/* Input bar */}
-        <View style={[S.inputBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+        <View style={[S.inputBar, { paddingBottom: insets.bottom + 8 }]}>
           <TouchableOpacity onPress={handlePickPhoto} style={S.photoBtn}>
             <MaterialIcons name="image" size={24} color={theme.primary} />
           </TouchableOpacity>
@@ -539,7 +591,7 @@ const GroupChatScreen: React.FC = () => {
           </TouchableOpacity>
         </View>
         </>)}
-      </Animated.View>
+      </KeyboardAvoidingView>
 
       {/* Members modal */}
       <Modal visible={showMembers} animationType="slide" transparent onRequestClose={() => setShowMembers(false)}>
@@ -567,7 +619,10 @@ const GroupChatScreen: React.FC = () => {
 
       {/* Rename modal */}
       <Modal visible={showRenameModal} animationType="slide" transparent onRequestClose={() => setShowRenameModal(false)}>
-        <View style={S.modalOverlay}>
+        <RNKeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={S.modalOverlay}
+        >
           <View style={[S.modalContent, { paddingHorizontal: 20 }]}>
             <Text style={S.modalTitle}>Renommer le groupe</Text>
             <TextInput
@@ -586,7 +641,7 @@ const GroupChatScreen: React.FC = () => {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </RNKeyboardAvoidingView>
       </Modal>
 
       {/* Lightbox */}

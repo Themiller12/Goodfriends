@@ -132,6 +132,16 @@ try {
                     sendResponse(false, 'messageId et emoji requis', null, 400);
                 }
 
+                // Correspondance clé → emoji affiché dans les notifications
+                $emojiDisplay = [
+                    'love'    => '❤️',
+                    'like'    => '👍',
+                    'wow'     => '😮',
+                    'haha'    => '😂',
+                    'dislike' => '👎',
+                    'angry'   => '😡',
+                ][$emoji] ?? $emoji;
+
                 // Vérifier que l'utilisateur est membre du groupe contenant ce message
                 $checkStmt = $db->prepare(
                     "SELECT gcm.group_id FROM group_chat_members gcm
@@ -159,6 +169,30 @@ try {
                         // Emoji différent → remplacer
                         $db->prepare("UPDATE group_message_reactions SET emoji = :emoji WHERE message_id = :mid AND user_id = :uid")
                            ->execute([':emoji' => $emoji, ':mid' => $messageId, ':uid' => $userId]);
+
+                        // Notifier l'auteur du message (réaction changée)
+                        $authorStmt = $db->prepare(
+                            "SELECT sender_id, sender_name FROM group_chat_messages WHERE id = :mid"
+                        );
+                        $authorStmt->execute([':mid' => $messageId]);
+                        $msgRow = $authorStmt->fetch(PDO::FETCH_ASSOC);
+                        if ($msgRow && $msgRow['sender_id'] !== $userId) {
+                            $reactorStmt = $db->prepare("SELECT first_name, last_name FROM users WHERE id = :uid");
+                            $reactorStmt->execute([':uid' => $userId]);
+                            $reactor = $reactorStmt->fetch(PDO::FETCH_ASSOC);
+                            $reactorName = trim(($reactor['first_name'] ?? '') . ' ' . ($reactor['last_name'] ?? '')) ?: 'Quelqu\'un';
+                            $fcm = new FCMService();
+                            $token = $fcm->getUserToken($db, $msgRow['sender_id']);
+                            if ($token) {
+                                $fcm->sendNotification(
+                                    $token,
+                                    "$reactorName a réagi",
+                                    "$reactorName a réagi $emojiDisplay à votre message",
+                                    ['type' => 'reaction', 'messageId' => $messageId, 'emoji' => $emoji, 'reactorId' => (string)$userId],
+                                    'reaction_' . $messageId
+                                );
+                            }
+                        }
                     }
                 } else {
                     // Nouvelle réaction
@@ -191,7 +225,7 @@ try {
                         $fcm->sendNotification(
                             $token,
                             "$reactorName a réagi",
-                            "$reactorName a réagi $emoji à votre message",
+                            "$reactorName a réagi $emojiDisplay à votre message",
                             ['type' => 'reaction', 'messageId' => $messageId, 'emoji' => $emoji, 'reactorId' => (string)$userId],
                             'reaction_' . $messageId
                         );
@@ -307,6 +341,30 @@ try {
             );
             $mGet->execute([':gid' => $groupId]);
             $insertedMembers = $mGet->fetchAll(PDO::FETCH_ASSOC);
+
+            // Envoyer une notification à chaque membre ajouté (sauf le créateur)
+            try {
+                $fcm = new FCMService();
+                $creatorStmt = $db->prepare('SELECT first_name, last_name FROM users WHERE id = :uid');
+                $creatorStmt->execute([':uid' => $userId]);
+                $creator = $creatorStmt->fetch(PDO::FETCH_ASSOC);
+                $creatorName = trim(($creator['first_name'] ?? '') . ' ' . ($creator['last_name'] ?? '')) ?: 'Quelqu\'un';
+                foreach ($members as $m) {
+                    if (empty($m['userId']) || $m['userId'] === $userId) continue;
+                    $token = $fcm->getUserToken($db, $m['userId']);
+                    if ($token) {
+                        $fcm->sendNotification(
+                            $token,
+                            'Nouveau groupe',
+                            "$creatorName vous a ajouté au groupe \"$name\"",
+                            ['type' => 'group_added', 'groupId' => $groupId, 'groupName' => $name],
+                            'group_added_' . $groupId . '_' . $m['userId']
+                        );
+                    }
+                }
+            } catch (Exception $e) {
+                error_log('FCM group notification error: ' . $e->getMessage());
+            }
 
             sendResponse(true, 'Groupe créé', [
                 'id'        => $groupId,

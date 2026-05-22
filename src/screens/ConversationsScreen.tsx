@@ -194,8 +194,14 @@ const ConversationsScreen: React.FC = () => {
     setModalVisible(true);
     setLoadingContacts(true);
     try {
-      const contacts = await StorageService.getContacts();
-      setGoodFriendsContacts(contacts.filter(c => !!c.goodfriendsUserId));
+      const [contacts, mutualIds] = await Promise.all([
+        StorageService.getContacts(),
+        FriendRequestService.getMutualFriendIds(),
+      ]);
+      const mutualSet = new Set(mutualIds);
+      setGoodFriendsContacts(
+        contacts.filter(c => !!c.goodfriendsUserId && mutualSet.has(c.goodfriendsUserId))
+      );
     } catch {
       Alert.alert('Erreur', 'Impossible de charger les contacts');
     } finally {
@@ -583,7 +589,10 @@ const styles = (theme: any) => StyleSheet.create({
     ...Shadow.sm,
   },
   itemUnread: {
-    backgroundColor: theme.primary + '08',
+    borderLeftWidth: 3,
+    borderLeftColor: theme.primary,
+    borderTopLeftRadius: 0,
+    borderBottomLeftRadius: 0,
   },
   avatarCircle: {
     width: 48,

@@ -450,5 +450,24 @@ if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'reject'
     }
 }
 
+// GET MUTUAL FRIENDS LIST - Récupérer la liste des IDs des amis mutuels acceptés
+if ($method === 'GET' && isset($_GET['action']) && $_GET['action'] === 'friends') {
+    $query = "SELECT 
+                CASE WHEN fr.sender_id = :user_id1 THEN fr.receiver_id ELSE fr.sender_id END as friend_id
+              FROM friend_requests fr
+              WHERE (fr.sender_id = :user_id2 OR fr.receiver_id = :user_id3)
+              AND fr.status = 'accepted'";
+    $stmt = $db->prepare($query);
+    $stmt->bindParam(':user_id1', $userId);
+    $stmt->bindParam(':user_id2', $userId);
+    $stmt->bindParam(':user_id3', $userId);
+    $stmt->execute();
+    $friendIds = [];
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $friendIds[] = $row['friend_id'];
+    }
+    sendResponse(true, 'Amis mutuels récupérés', $friendIds);
+}
+
 sendResponse(false, 'Action non reconnue', null, 400);
 ?>

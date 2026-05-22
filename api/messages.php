@@ -115,7 +115,7 @@ try {
                 
             } elseif ($action === 'conversations') {
                 // Récupérer la liste des conversations avec dernier message et nombre de non-lus
-                // Ne récupérer que les conversations avec des amis actifs (status = 'accepted')
+                // Inclure toutes les conversations, même avec des contacts supprimés (is_mutual=false)
                 $stmt = $db->prepare("
                     SELECT DISTINCT
                         CASE 
@@ -137,7 +137,15 @@ try {
                         (SELECT COUNT(*) FROM messages 
                          WHERE sender_id = CASE WHEN m.sender_id = :user_id10 THEN m.receiver_id ELSE m.sender_id END
                            AND receiver_id = :user_id11
-                           AND is_read = FALSE) as unread_count
+                           AND is_read = FALSE) as unread_count,
+                        (EXISTS (
+                            SELECT 1 FROM friend_requests fr
+                            WHERE (
+                                (fr.sender_id = :uid_m1 AND fr.receiver_id = CASE WHEN m.sender_id = :uid_m2 THEN m.receiver_id ELSE m.sender_id END)
+                                OR (fr.sender_id = CASE WHEN m.sender_id = :uid_m3 THEN m.receiver_id ELSE m.sender_id END AND fr.receiver_id = :uid_m4)
+                            )
+                            AND fr.status = 'accepted'
+                        )) as is_mutual
                     FROM messages m
                     LEFT JOIN users u ON u.id = CASE 
                         WHEN m.sender_id = :user_id12 THEN m.receiver_id
@@ -145,14 +153,6 @@ try {
                     END
                     LEFT JOIN user_profiles up ON u.id = up.user_id
                     WHERE (m.sender_id = :user_id13 OR m.receiver_id = :user_id14)
-                    AND EXISTS (
-                        SELECT 1 FROM friend_requests fr
-                        WHERE (
-                            (fr.sender_id = :user_id15 AND fr.receiver_id = CASE WHEN m.sender_id = :user_id16 THEN m.receiver_id ELSE m.sender_id END)
-                            OR (fr.sender_id = CASE WHEN m.sender_id = :user_id17 THEN m.receiver_id ELSE m.sender_id END AND fr.receiver_id = :user_id18)
-                        )
-                        AND fr.status = 'accepted'
-                    )
                     GROUP BY other_user_id
                     ORDER BY last_message_time DESC
                 ");
@@ -170,10 +170,10 @@ try {
                 $stmt->bindParam(':user_id12', $userId);
                 $stmt->bindParam(':user_id13', $userId);
                 $stmt->bindParam(':user_id14', $userId);
-                $stmt->bindParam(':user_id15', $userId);
-                $stmt->bindParam(':user_id16', $userId);
-                $stmt->bindParam(':user_id17', $userId);
-                $stmt->bindParam(':user_id18', $userId);
+                $stmt->bindParam(':uid_m1', $userId);
+                $stmt->bindParam(':uid_m2', $userId);
+                $stmt->bindParam(':uid_m3', $userId);
+                $stmt->bindParam(':uid_m4', $userId);
                 $stmt->execute();
                 
                 $conversations = [];
@@ -186,7 +186,8 @@ try {
                         'otherUserPhone' => $row['other_user_phone'],
                         'lastMessage' => $row['last_message'],
                         'lastMessageTime' => $row['last_message_time'],
-                        'unreadCount' => (int)$row['unread_count']
+                        'unreadCount' => (int)$row['unread_count'],
+                        'isMutual' => (bool)$row['is_mutual']
                     ];
                 }
                 
@@ -204,7 +205,30 @@ try {
                 $row = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 sendResponse(true, 'Nombre de messages non lus', ['count' => (int)$row['total']]);
-                
+
+            } elseif ($action === 'check-friendship') {
+                // Vérifier si deux utilisateurs sont toujours amis mutuels
+                if (!isset($_GET['otherUserId'])) {
+                    sendResponse(false, 'otherUserId requis', null, 400);
+                }
+                $otherUserId = $_GET['otherUserId'];
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) as cnt
+                    FROM friend_requests
+                    WHERE (
+                        (sender_id = :uid1 AND receiver_id = :oid1)
+                        OR (sender_id = :oid2 AND receiver_id = :uid2)
+                    )
+                    AND status = 'accepted'
+                ");
+                $stmt->bindParam(':uid1', $userId);
+                $stmt->bindParam(':oid1', $otherUserId);
+                $stmt->bindParam(':oid2', $otherUserId);
+                $stmt->bindParam(':uid2', $userId);
+                $stmt->execute();
+                $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                sendResponse(true, 'Statut ami récupéré', ['isMutual' => (bool)$row['cnt']]);
+
             } else {
                 sendResponse(false, 'Action non reconnue', null, 400);
             }
@@ -452,6 +476,16 @@ try {
                 $messageId = $data['messageId'];
                 $emoji = mb_substr(trim($data['emoji']), 0, 10); // sécurité longueur
 
+                // Correspondance clé → emoji affiché dans les notifications
+                $emojiDisplay = [
+                    'love'    => '❤️',
+                    'like'    => '👍',
+                    'wow'     => '😮',
+                    'haha'    => '😂',
+                    'dislike' => '👎',
+                    'angry'   => '😡',
+                ][$emoji] ?? $emoji;
+
                 // Vérifier que le message appartient à une conversation de l'utilisateur
                 $checkMsg = $db->prepare(
                     'SELECT id FROM messages WHERE id = :mid AND (sender_id = :uid1 OR receiver_id = :uid2)'
@@ -492,6 +526,32 @@ try {
                         $updStmt->bindParam(':mid', $messageId);
                         $updStmt->bindParam(':uid', $userId);
                         $updStmt->execute();
+
+                        // Notifier l'auteur du message (réaction changée)
+                        $authorStmt = $db->prepare(
+                            'SELECT sender_id, receiver_id, message FROM messages WHERE id = :mid'
+                        );
+                        $authorStmt->execute([':mid' => $messageId]);
+                        $msgRow = $authorStmt->fetch(PDO::FETCH_ASSOC);
+                        if ($msgRow && $msgRow['sender_id'] !== $userId) {
+                            $reactorStmt = $db->prepare('SELECT first_name, last_name FROM users WHERE id = :uid');
+                            $reactorStmt->execute([':uid' => $userId]);
+                            $reactor = $reactorStmt->fetch(PDO::FETCH_ASSOC);
+                            $reactorName = trim(($reactor['first_name'] ?? '') . ' ' . ($reactor['last_name'] ?? '')) ?: "Quelqu'un";
+                            $fcm = new FCMService();
+                            $token = $fcm->getUserToken($db, $msgRow['sender_id']);
+                            if ($token) {
+                                $preview = mb_substr($msgRow['message'] ?? '', 0, 50);
+                                $fcm->sendNotification(
+                                    $token,
+                                    "$reactorName a réagi",
+                                    $preview ? "$reactorName a réagi $emojiDisplay à \"$preview\"" : "$reactorName a réagi $emojiDisplay à votre message",
+                                    ['type' => 'reaction', 'messageId' => $messageId, 'emoji' => $emoji, 'reactorId' => (string)$userId],
+                                    'reaction_' . $messageId
+                                );
+                            }
+                        }
+
                         sendResponse(true, 'Réaction mise à jour', ['action' => 'updated']);
                     }
                 } else {
@@ -524,7 +584,7 @@ try {
                             $fcm->sendNotification(
                                 $token,
                                 "$reactorName a réagi",
-                                $preview ? "$reactorName a réagi $emoji à \"$preview\"" : "$reactorName a réagi $emoji à votre message",
+                                $preview ? "$reactorName a réagi $emojiDisplay à \"$preview\"" : "$reactorName a réagi $emojiDisplay à votre message",
                                 ['type' => 'reaction', 'messageId' => $messageId, 'emoji' => $emoji, 'reactorId' => (string)$userId],
                                 'reaction_' . $messageId
                             );
