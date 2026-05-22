@@ -642,7 +642,6 @@ const ChatScreen: React.FC = () => {
           </Text>
           {isOtherUserOnline && <RNText style={s.headerOnline}>● En ligne</RNText>}
         </TouchableOpacity>
-        <OnlineIndicator isOnline={isOtherUserOnline} size={12} />
       </View>
 
       {/* Content area — keyboard handled by KeyboardAvoidingView */}
@@ -817,7 +816,6 @@ const styles = (theme: any) => StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: '#FFF',
-    flex: 1,
   },
   headerOnline: {
     fontSize: 11,
