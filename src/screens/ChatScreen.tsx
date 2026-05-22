@@ -138,6 +138,7 @@ const ChatScreen: React.FC = () => {
 
   const flatListRef = useRef<FlatList>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const onlinePollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentUserIdRef = useRef('');
   const lastMessageIdRef = useRef('');
   const suppressScrollRef = useRef(false);
@@ -174,10 +175,16 @@ const ChatScreen: React.FC = () => {
     OnlineStatusService.getStatuses([otherUserId]).then(r => setIsOtherUserOnline(r[otherUserId] ?? false));
 
     pollingRef.current = setInterval(() => loadMessages(true), 3000);
+    onlinePollingRef.current = setInterval(() => {
+      OnlineStatusService.getStatuses([otherUserId]).then(r =>
+        setIsOtherUserOnline(r[otherUserId] ?? false)
+      );
+    }, 30000);
 
     return () => {
       AppState.setCurrentOpenChat(null);
       if (pollingRef.current) clearInterval(pollingRef.current);
+      if (onlinePollingRef.current) clearInterval(onlinePollingRef.current);
       if (scrollReadyTimerRef.current) clearTimeout(scrollReadyTimerRef.current);
     };
   }, [otherUserId]);
@@ -280,12 +287,14 @@ const ChatScreen: React.FC = () => {
             );
           });
 
-          // Mettre à jour les réactions sur les messages existants depuis les données fraîches
+          // Mettre à jour les réactions et isRead sur les messages existants depuis les données fraîches
           const withUpdatedReactions = withoutDupes.map(m => {
             const fresh = dataMap.get(m.id);
             if (!fresh) return m;
-            if (JSON.stringify(fresh.reactions) !== JSON.stringify(m.reactions)) {
-              return { ...m, reactions: fresh.reactions };
+            const reactionsChanged = JSON.stringify(fresh.reactions) !== JSON.stringify(m.reactions);
+            const readChanged = fresh.isRead !== m.isRead;
+            if (reactionsChanged || readChanged) {
+              return { ...m, reactions: fresh.reactions, isRead: fresh.isRead };
             }
             return m;
           });

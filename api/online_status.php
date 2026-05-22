@@ -4,8 +4,7 @@ require_once 'config.php';
 $db = new Database();
 $conn = $db->getConnection();
 
-$user = verifyToken();
-$userId = $user['user_id'];
+$userId = verifyToken(); // verifyToken() retourne directement l'user_id (string)
 
 $method = $_SERVER['REQUEST_METHOD'];
 
