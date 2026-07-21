@@ -91,7 +91,7 @@ CREATE TABLE family_members (
     last_name VARCHAR(100),
     date_of_birth DATE,
     gender ENUM('male', 'female', 'other'),
-    relation_type ENUM('spouse', 'child', 'parent', 'father', 'mother', 'sibling', 'cousin', 'stepmother', 'stepfather') NOT NULL,
+    relation_type ENUM('spouse', 'child', 'parent', 'father', 'mother', 'sibling', 'cousin', 'stepmother', 'stepfather', 'friend', 'colleague', 'other') NOT NULL,
     notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -230,3 +230,7 @@ VALUES
 
 -- ─── Migration : ajout du statut en ligne dans users ──────────────────────────
 le statut en ligne (dans les options de confide,tialité) est affiché où si activé ?
+
+-- ─── Migration : autoriser les relations libres non liées à un contact ───────
+-- ALTER TABLE family_members
+--   MODIFY relation_type ENUM('spouse', 'child', 'parent', 'father', 'mother', 'sibling', 'cousin', 'stepmother', 'stepfather', 'friend', 'colleague', 'other') NOT NULL;

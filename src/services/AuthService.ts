@@ -2,6 +2,7 @@ import {UserAccount, UserProfile} from '../types';
 import ApiClient from './ApiClient';
 import API_CONFIG from '../config/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import E2EEService from './E2EEService';
 
 interface ApiResponse<T> {
   success: boolean;
@@ -11,6 +12,14 @@ interface ApiResponse<T> {
 
 class AuthService {
   private currentUser: UserAccount | null = null;
+
+  onSessionExpired(callback: () => void): () => void {
+    return ApiClient.onUnauthorized(async () => {
+      this.currentUser = null;
+      await AsyncStorage.removeItem('@current_user');
+      callback();
+    });
+  }
 
   // Créer un nouveau compte
   async register(
@@ -110,6 +119,11 @@ class AuthService {
       this.currentUser = account;
       await AsyncStorage.setItem('@current_user', JSON.stringify(account));
 
+      // Enregistrer la clé publique E2EE en arrière-plan sans bloquer la connexion.
+      E2EEService.ensureRegisteredKeyPair().catch(error => {
+        console.warn('[AuthService] E2EE key registration failed after login:', error);
+      });
+
       return account;
     } catch (error: any) {
       console.error('Error logging in:', error);
@@ -132,6 +146,11 @@ class AuthService {
 
       // Sauvegarder le token
       await ApiClient.setToken(response.data.token);
+
+      // Préparer la clé E2EE dès la vérification pour pouvoir recevoir des messages chiffrés.
+      E2EEService.ensureRegisteredKeyPair().catch(error => {
+        console.warn('[AuthService] E2EE key registration failed after verify:', error);
+      });
 
       return true;
     } catch (error: any) {
@@ -173,6 +192,28 @@ class AuthService {
   async isLoggedIn(): Promise<boolean> {
     const token = await AsyncStorage.getItem('@auth_token');
     return token !== null;
+  }
+
+  async validateSession(): Promise<boolean> {
+    const token = await AsyncStorage.getItem('@auth_token');
+    if (!token) {
+      return false;
+    }
+
+    try {
+      const response = await ApiClient.get<ApiResponse<any>>(
+        `${API_CONFIG.ENDPOINTS.AUTH}?action=profile`
+      );
+      return !!response.success;
+    } catch (error: any) {
+      if (error?.response?.status === 401) {
+        await this.logout();
+        return false;
+      }
+
+      // En cas de panne réseau, conserver la session locale.
+      return true;
+    }
   }
 
   // Obtenir le compte actuel

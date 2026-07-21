@@ -43,21 +43,59 @@ require_once __DIR__ . '/PHPMailer/Exception.php';
 require_once __DIR__ . '/PHPMailer/PHPMailer.php';
 require_once __DIR__ . '/PHPMailer/SMTP.php';
 
+function getEnvOrDefault(string $key, $default) {
+  $value = getenv($key);
+  if ($value === false || $value === null || $value === '') {
+    return $default;
+  }
+  return $value;
+}
+
+function setLastMailerError(string $message): void {
+  $GLOBALS['GOODFRIENDS_MAILER_LAST_ERROR'] = $message;
+  error_log('[Mailer] ' . $message);
+}
+
+function getLastMailerError(): string {
+  return $GLOBALS['GOODFRIENDS_MAILER_LAST_ERROR'] ?? '';
+}
+
+function assertMailerConfigured(string $smtpUser, string $smtpPass): void {
+  $badUsers = ['votre@gmail.com', ''];
+  $badPasses = ['votre_app_password', ''];
+
+  if (in_array($smtpUser, $badUsers, true) || in_array($smtpPass, $badPasses, true)) {
+    throw new Exception('SMTP non configuré. Définissez SMTP_USER et SMTP_PASS (variables d\'environnement) dans l\'environnement PHP.');
+  }
+}
+
 /**
  * Crée et configure une instance PHPMailer prête à l'envoi.
  */
 function createMailer(): PHPMailer {
-    $mail = new PHPMailer(true);
-    $mail->isSMTP();
-    $mail->Host       = SMTP_HOST;
-    $mail->SMTPAuth   = true;
-    $mail->Username   = SMTP_USER;
-    $mail->Password   = SMTP_PASS;
-    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-    $mail->Port       = SMTP_PORT;
-    $mail->CharSet    = 'UTF-8';
-    $mail->setFrom(SMTP_FROM_EMAIL, SMTP_FROM_NAME);
-    return $mail;
+  $smtpHost = (string)getEnvOrDefault('SMTP_HOST', SMTP_HOST);
+  $smtpPort = (int)getEnvOrDefault('SMTP_PORT', SMTP_PORT);
+  $smtpUser = (string)getEnvOrDefault('SMTP_USER', SMTP_USER);
+  $smtpPass = (string)getEnvOrDefault('SMTP_PASS', SMTP_PASS);
+  $smtpFromEmail = (string)getEnvOrDefault('SMTP_FROM_EMAIL', $smtpUser ?: SMTP_FROM_EMAIL);
+  $smtpFromName = (string)getEnvOrDefault('SMTP_FROM_NAME', SMTP_FROM_NAME);
+  $smtpDebug = (int)getEnvOrDefault('SMTP_DEBUG', 0);
+
+  assertMailerConfigured($smtpUser, $smtpPass);
+
+  $mail = new PHPMailer(true);
+  $mail->isSMTP();
+  $mail->Host       = $smtpHost;
+  $mail->SMTPAuth   = true;
+  $mail->Username   = $smtpUser;
+  $mail->Password   = $smtpPass;
+  $mail->SMTPSecure = $smtpPort === 465 ? PHPMailer::ENCRYPTION_SMTPS : PHPMailer::ENCRYPTION_STARTTLS;
+  $mail->Port       = $smtpPort;
+  $mail->SMTPDebug  = $smtpDebug;
+  $mail->CharSet    = 'UTF-8';
+  $mail->Timeout    = 20;
+  $mail->setFrom($smtpFromEmail, $smtpFromName);
+  return $mail;
 }
 
 /**
@@ -100,7 +138,7 @@ function sendVerificationEmail(string $email, string $firstName, string $code): 
         $mail->send();
         return true;
     } catch (Exception $e) {
-        error_log('[Mailer] sendVerificationEmail failed: ' . $e->getMessage());
+      setLastMailerError('sendVerificationEmail failed: ' . $e->getMessage());
         return false;
     }
 }
@@ -149,7 +187,7 @@ function sendWelcomeEmail(string $email, string $firstName): bool {
         $mail->send();
         return true;
     } catch (Exception $e) {
-        error_log('[Mailer] sendWelcomeEmail failed: ' . $e->getMessage());
+      setLastMailerError('sendWelcomeEmail failed: ' . $e->getMessage());
         return false;
     }
 }

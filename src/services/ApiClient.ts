@@ -2,9 +2,22 @@ import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import API_CONFIG from '../config/api';
 
+type UnauthorizedListener = () => void;
+
 class ApiClient {
   private client: AxiosInstance;
   private token: string | null = null;
+  private unauthorizedListeners = new Set<UnauthorizedListener>();
+
+  private notifyUnauthorized() {
+    this.unauthorizedListeners.forEach(listener => {
+      try {
+        listener();
+      } catch (error) {
+        console.error('[ApiClient] Unauthorized listener failed:', error);
+      }
+    });
+  }
 
   constructor() {
     this.client = axios.create({
@@ -38,6 +51,8 @@ class ApiClient {
         if (error.response?.status === 401) {
           // Token expiré, déconnecter l'utilisateur
           await this.clearToken();
+          await AsyncStorage.removeItem('@current_user');
+          this.notifyUnauthorized();
         }
         
         // Gérer les erreurs réseau
@@ -60,6 +75,13 @@ class ApiClient {
   async clearToken() {
     this.token = null;
     await AsyncStorage.removeItem('@auth_token');
+  }
+
+  onUnauthorized(listener: UnauthorizedListener): () => void {
+    this.unauthorizedListeners.add(listener);
+    return () => {
+      this.unauthorizedListeners.delete(listener);
+    };
   }
 
   async get<T>(url: string, config?: AxiosRequestConfig) {

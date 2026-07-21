@@ -46,11 +46,50 @@ const AppNavigator = forwardRef<any, {onReady?: () => void}>((props, ref) => {
   const [isLoading, setIsLoading] = useState(true);
   const [activeRoute, setActiveRoute] = useState('');
   const slideDirectionRef = useRef<'slide_from_right' | 'slide_from_left'>('slide_from_right');
+  const lastSessionCheckRef = useRef(0);
+  const checkingSessionRef = useRef(false);
+  const hasShownSessionAlertRef = useRef(false);
+
+  const handleSessionExpired = useCallback(() => {
+    setIsLoggedIn(false);
+    (ref as React.RefObject<any>)?.current?.reset({
+      index: 0,
+      routes: [{name: 'Login'}],
+    });
+
+    if (!hasShownSessionAlertRef.current) {
+      hasShownSessionAlertRef.current = true;
+      Alert.alert('Session expirée', 'Votre session a expiré. Veuillez vous reconnecter.');
+    }
+  }, [ref]);
+
+  const checkSessionIfNeeded = useCallback(async (force = false) => {
+    if (!isLoggedIn || checkingSessionRef.current) {
+      return;
+    }
+
+    const now = Date.now();
+    if (!force && now - lastSessionCheckRef.current < 15000) {
+      return;
+    }
+
+    checkingSessionRef.current = true;
+    lastSessionCheckRef.current = now;
+    try {
+      const isSessionValid = await AuthService.validateSession();
+      if (!isSessionValid) {
+        handleSessionExpired();
+      }
+    } finally {
+      checkingSessionRef.current = false;
+    }
+  }, [isLoggedIn, handleSessionExpired]);
 
   const handleStateChange = useCallback((state: any) => {
     const route = getActiveRouteName(state);
     setActiveRoute(route);
-  }, []);
+    checkSessionIfNeeded(false);
+  }, [checkSessionIfNeeded]);
 
   const handleNavigate = useCallback((route: string) => {
     const currentIdx = MAIN_TABS.indexOf(activeRoute as any);
@@ -68,16 +107,42 @@ const AppNavigator = forwardRef<any, {onReady?: () => void}>((props, ref) => {
   }, []);
 
   useEffect(() => {
+    const unsubscribe = AuthService.onSessionExpired(() => {
+      handleSessionExpired();
+    });
+
+    return unsubscribe;
+  }, [handleSessionExpired]);
+
+  useEffect(() => {
     if (isLoggedIn) {
       OnlineStatusService.startHeartbeat();
+      hasShownSessionAlertRef.current = false;
     } else {
       OnlineStatusService.stopHeartbeat();
     }
   }, [isLoggedIn]);
 
+  useEffect(() => {
+    if (!isLoggedIn) return;
+
+    const interval = setInterval(() => {
+      checkSessionIfNeeded(true);
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [isLoggedIn, checkSessionIfNeeded]);
+
   const checkLoginStatus = async () => {
     const loggedIn = await AuthService.isLoggedIn();
-    setIsLoggedIn(loggedIn);
+    if (!loggedIn) {
+      setIsLoggedIn(false);
+      setIsLoading(false);
+      return;
+    }
+
+    const validSession = await AuthService.validateSession();
+    setIsLoggedIn(validSession);
     setIsLoading(false);
   };
 

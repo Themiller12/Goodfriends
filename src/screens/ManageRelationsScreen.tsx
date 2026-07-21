@@ -12,7 +12,7 @@ import {
   FlatList,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import {Contact, Child, RelationType, Relationship} from '../types';
+import {Contact, Child, RelationType, FamilyMemberInfo} from '../types';
 import ContactService from '../services/ContactService';
 import StorageService from '../services/StorageService';
 import StorageServiceAPI from '../services/StorageServiceAPI';
@@ -39,10 +39,13 @@ const ManageRelationsScreen: React.FC<ManageRelationsScreenProps> = ({
   
   // Gestion des relations
   const [showRelationModal, setShowRelationModal] = useState(false);
+  const [relationMode, setRelationMode] = useState<'linked' | 'free'>('linked');
   const [selectedContactId, setSelectedContactId] = useState('');
   const [relationType, setRelationType] = useState<RelationType>(RelationType.FRIEND);
   const [customRelationLabel, setCustomRelationLabel] = useState('');
   const [relationNotes, setRelationNotes] = useState('');
+  const [freeRelationFirstName, setFreeRelationFirstName] = useState('');
+  const [freeRelationLastName, setFreeRelationLastName] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredContacts, setFilteredContacts] = useState<Contact[]>([]);
   const [showRelationTypePickerModal, setShowRelationTypePickerModal] = useState(false);
@@ -73,6 +76,9 @@ const ManageRelationsScreen: React.FC<ManageRelationsScreenProps> = ({
       // S'assurer que children est initialisé
       if (!foundContact.children) {
         foundContact.children = [];
+      }
+      if (!foundContact.familyMembers) {
+        foundContact.familyMembers = [];
       }
       setContact(foundContact);
     }
@@ -111,36 +117,105 @@ const ManageRelationsScreen: React.FC<ManageRelationsScreenProps> = ({
     }
   };
 
+  const isFreeRelationType = (value: RelationType): boolean => {
+    return value === RelationType.FRIEND || value === RelationType.COLLEAGUE || value === RelationType.OTHER;
+  };
+
+  const resetRelationForm = () => {
+    setShowRelationModal(false);
+    setRelationMode('linked');
+    setSelectedContactId('');
+    setRelationType(RelationType.FRIEND);
+    setRelationNotes('');
+    setCustomRelationLabel('');
+    setSearchQuery('');
+    setFreeRelationFirstName('');
+    setFreeRelationLastName('');
+  };
+
   const handleAddRelation = async () => {
-    if (!selectedContactId) {
+    if (!contact) {
+      Alert.alert('Erreur', 'Contact introuvable');
+      return;
+    }
+
+    if (relationMode === 'linked' && !selectedContactId) {
       Alert.alert('Erreur', 'Veuillez sélectionner un contact');
       return;
     }
 
+    if (relationMode === 'free' && !freeRelationFirstName.trim()) {
+      Alert.alert('Erreur', 'Le prénom est obligatoire');
+      return;
+    }
+
+    if (relationMode === 'free' && !isFreeRelationType(relationType)) {
+      Alert.alert('Erreur', 'Pour une relation libre, utilisez Ami(e), Collègue ou Autre');
+      return;
+    }
+
     try {
-      await ContactService.addRelationship(
-        contactId,
-        selectedContactId,
-        relationType,
-        relationNotes,
-        relationType === RelationType.OTHER && customRelationLabel.trim()
-          ? customRelationLabel.trim()
-          : undefined,
-      );
+      if (relationMode === 'linked') {
+        await ContactService.addRelationship(
+          contactId,
+          selectedContactId,
+          relationType,
+          relationNotes,
+          relationType === RelationType.OTHER && customRelationLabel.trim()
+            ? customRelationLabel.trim()
+            : undefined,
+        );
+      } else {
+        const freeRelation: FamilyMemberInfo = {
+          id: `fm_${Date.now()}`,
+          firstName: freeRelationFirstName.trim(),
+          lastName: freeRelationLastName.trim() || undefined,
+          relationType,
+          notes: relationNotes.trim() || undefined,
+        };
+
+        const updatedContact = {
+          ...contact,
+          familyMembers: [...(contact.familyMembers || []), freeRelation],
+        };
+
+        await StorageService.updateContact(updatedContact);
+      }
 
       await loadContact();
-      
-      setShowRelationModal(false);
-      setSelectedContactId('');
-      setRelationType(RelationType.FRIEND);
-      setRelationNotes('');
-      setCustomRelationLabel('');
-      setSearchQuery('');
-      
+      resetRelationForm();
       Alert.alert('Succès', 'Relation ajoutée avec succès');
     } catch (error: any) {
       Alert.alert('Erreur', error.message);
     }
+  };
+
+  const handleDeleteFreeRelation = (familyMemberId: string) => {
+    Alert.alert(
+      'Supprimer la relation',
+      'Êtes-vous sûr de vouloir supprimer cette relation ?',
+      [
+        {text: 'Annuler', style: 'cancel'},
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              if (!contact) return;
+              const updatedContact = {
+                ...contact,
+                familyMembers: (contact.familyMembers || []).filter(fm => fm.id !== familyMemberId),
+              };
+              await StorageService.updateContact(updatedContact);
+              await loadContact();
+              Alert.alert('Succès', 'Relation supprimée');
+            } catch (error: any) {
+              Alert.alert('Erreur', error.message || 'Impossible de supprimer la relation');
+            }
+          },
+        },
+      ],
+    );
   };
 
   const handleDeleteChild = (childId: string) => {
@@ -233,6 +308,9 @@ const ManageRelationsScreen: React.FC<ManageRelationsScreenProps> = ({
     const relatedContact = allContacts.find(c => c.id === r.contactId);
     return {relationship: r, contact: relatedContact};
   });
+  const freeRelations = (contact.familyMembers || []).filter(
+    fm => fm.relationType === RelationType.FRIEND || fm.relationType === RelationType.COLLEAGUE || fm.relationType === RelationType.OTHER,
+  );
 
   return (
     <ScrollView style={styles.container}>
@@ -319,10 +397,32 @@ const ManageRelationsScreen: React.FC<ManageRelationsScreenProps> = ({
             </TouchableOpacity>
           </View>
 
-          {relatedContacts.length === 0 ? (
+          {relatedContacts.length === 0 && freeRelations.length === 0 ? (
             <Text style={styles.emptyText}>Aucune relation ajoutée</Text>
           ) : (
             <>
+              {freeRelations.map((relation, index) => (
+                <View key={relation.id || `free-relation-${index}`} style={styles.item}>
+                  <View style={styles.itemContent}>
+                    <Text style={styles.itemType}>
+                      {getRelationLabel(relation.relationType)}
+                    </Text>
+                    <Text style={styles.itemName}>
+                      {relation.firstName} {relation.lastName || ''}
+                    </Text>
+                    <Text style={styles.itemDetail}>Relation non liée à un contact</Text>
+                    {relation.notes && (
+                      <Text style={styles.itemNotes}>{relation.notes}</Text>
+                    )}
+                  </View>
+                  <TouchableOpacity
+                    style={styles.deleteButton}
+                    onPress={() => handleDeleteFreeRelation(relation.id)}>
+                    <Text style={styles.deleteButtonText}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+
               {relatedContacts.map(({relationship, contact: relatedContact}, index) => {
                 if (!relatedContact) return null;
                 return (
@@ -427,35 +527,81 @@ const ManageRelationsScreen: React.FC<ManageRelationsScreenProps> = ({
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Ajouter une relation</Text>
 
-            <Text style={styles.label}>Rechercher un contact *</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Nom ou prénom..."
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-
-            <View style={styles.contactList}>
-              <FlatList
-                data={filteredContacts}
-                keyExtractor={item => item.id}
-                renderItem={({item}) => (
-                  <TouchableOpacity
-                    style={[
-                      styles.contactItem,
-                      selectedContactId === item.id && styles.contactItemSelected,
-                    ]}
-                    onPress={() => setSelectedContactId(item.id)}>
-                    <Text style={styles.contactItemText}>
-                      {item.firstName} {item.lastName}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-                ListEmptyComponent={
-                  <Text style={styles.emptyText}>Aucun contact trouvé</Text>
-                }
-              />
+            <Text style={styles.label}>Mode d'ajout</Text>
+            <View style={styles.modeRow}>
+              <TouchableOpacity
+                style={[styles.modeButton, relationMode === 'linked' && styles.modeButtonSelected]}
+                onPress={() => setRelationMode('linked')}>
+                <Text style={[styles.modeButtonText, relationMode === 'linked' && styles.modeButtonTextSelected]}>
+                  Lier à un contact
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modeButton, relationMode === 'free' && styles.modeButtonSelected]}
+                onPress={() => {
+                  setRelationMode('free');
+                  if (!isFreeRelationType(relationType)) {
+                    setRelationType(RelationType.FRIEND);
+                  }
+                }}>
+                <Text style={[styles.modeButtonText, relationMode === 'free' && styles.modeButtonTextSelected]}>
+                  Relation libre
+                </Text>
+              </TouchableOpacity>
             </View>
+
+            {relationMode === 'linked' ? (
+              <>
+                <Text style={styles.label}>Rechercher un contact *</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Nom ou prénom..."
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                />
+
+                <View style={styles.contactList}>
+                  <FlatList
+                    data={filteredContacts}
+                    keyExtractor={item => item.id}
+                    renderItem={({item}) => (
+                      <TouchableOpacity
+                        style={[
+                          styles.contactItem,
+                          selectedContactId === item.id && styles.contactItemSelected,
+                        ]}
+                        onPress={() => setSelectedContactId(item.id)}>
+                        <Text style={styles.contactItemText}>
+                          {item.firstName} {item.lastName}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    ListEmptyComponent={
+                      <Text style={styles.emptyText}>Aucun contact trouvé</Text>
+                    }
+                  />
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.label}>Prénom *</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Prénom"
+                  value={freeRelationFirstName}
+                  onChangeText={setFreeRelationFirstName}
+                  autoCapitalize="words"
+                />
+                <Text style={styles.label}>Nom</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Nom"
+                  value={freeRelationLastName}
+                  onChangeText={setFreeRelationLastName}
+                  autoCapitalize="words"
+                />
+              </>
+            )}
 
             <Text style={styles.label}>Type de relation *</Text>
             <TouchableOpacity
@@ -515,19 +661,25 @@ const ManageRelationsScreen: React.FC<ManageRelationsScreenProps> = ({
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Type de relation</Text>
 
-            {[
-              {label: 'Ami(e)',       value: RelationType.FRIEND},
-              {label: 'Conjoint(e)', value: RelationType.SPOUSE},
-              {label: 'Enfant',      value: RelationType.CHILD},
-              {label: 'Père',        value: RelationType.FATHER},
-              {label: 'Mère',        value: RelationType.MOTHER},
-              {label: 'Frère/Sœur', value: RelationType.SIBLING},
-              {label: 'Cousin(e)',   value: RelationType.COUSIN},
-              {label: 'Belle-mère',  value: RelationType.STEPMOTHER},
-              {label: 'Beau-père',   value: RelationType.STEPFATHER},
-              {label: 'Collègue',    value: RelationType.COLLEAGUE},
-              {label: 'Autre...',    value: RelationType.OTHER},
-            ].map(({label, value}) => (
+            {(relationMode === 'linked'
+              ? [
+                  {label: 'Ami(e)', value: RelationType.FRIEND},
+                  {label: 'Conjoint(e)', value: RelationType.SPOUSE},
+                  {label: 'Enfant', value: RelationType.CHILD},
+                  {label: 'Père', value: RelationType.FATHER},
+                  {label: 'Mère', value: RelationType.MOTHER},
+                  {label: 'Frère/Sœur', value: RelationType.SIBLING},
+                  {label: 'Cousin(e)', value: RelationType.COUSIN},
+                  {label: 'Belle-mère', value: RelationType.STEPMOTHER},
+                  {label: 'Beau-père', value: RelationType.STEPFATHER},
+                  {label: 'Collègue', value: RelationType.COLLEAGUE},
+                  {label: 'Autre...', value: RelationType.OTHER},
+                ]
+              : [
+                  {label: 'Ami(e)', value: RelationType.FRIEND},
+                  {label: 'Collègue', value: RelationType.COLLEAGUE},
+                  {label: 'Autre...', value: RelationType.OTHER},
+                ]).map(({label, value}) => (
               <TouchableOpacity
                 key={value}
                 style={[
@@ -786,6 +938,31 @@ const styles = StyleSheet.create({
   relationTypeOptionTextSelected: {
     color: '#fff',
     fontWeight: 'bold',
+  },
+  modeRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 10,
+  },
+  modeButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    backgroundColor: '#fff',
+    alignItems: 'center',
+  },
+  modeButtonSelected: {
+    backgroundColor: '#2196F3',
+    borderColor: '#2196F3',
+  },
+  modeButtonText: {
+    color: '#333',
+    fontWeight: '600',
+  },
+  modeButtonTextSelected: {
+    color: '#fff',
   },
 });
 

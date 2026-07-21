@@ -54,7 +54,21 @@ if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'registe
     
     if ($stmt->execute()) {
         // Envoyer le mail de vérification réel
-        sendVerificationEmail($data['email'], $data['firstName'], $verificationCode);
+        $emailSent = sendVerificationEmail($data['email'], $data['firstName'], $verificationCode);
+        if (!$emailSent) {
+            // Éviter les comptes non vérifiables si l'email ne part pas.
+            $cleanupQuery = "DELETE FROM users WHERE id = :id";
+            $cleanupStmt = $db->prepare($cleanupQuery);
+            $cleanupStmt->bindParam(':id', $userId);
+            $cleanupStmt->execute();
+
+            sendResponse(
+                false,
+                'Impossible d\'envoyer l\'email de vérification. Vérifiez la configuration SMTP. Détail: ' . getLastMailerError(),
+                null,
+                500
+            );
+        }
 
         sendResponse(true, 'Compte créé. Un email de vérification a été envoyé.', [
             'userId' => $userId,
@@ -178,7 +192,16 @@ if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'resend'
         $row = $nameStmt->fetch(PDO::FETCH_ASSOC);
         $firstName = $row ? $row['first_name'] : '';
 
-        sendVerificationEmail($data['email'], $firstName, $newCode);
+        $emailSent = sendVerificationEmail($data['email'], $firstName, $newCode);
+        if (!$emailSent) {
+            sendResponse(
+                false,
+                'Impossible d\'envoyer le code de vérification. Vérifiez la configuration SMTP. Détail: ' . getLastMailerError(),
+                null,
+                500
+            );
+        }
+
         sendResponse(true, 'Nouveau code envoyé par email');
     } else {
         sendResponse(false, 'Erreur lors de l\'envoi du code', null, 500);

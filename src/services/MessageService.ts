@@ -3,6 +3,7 @@ import NotificationService from './NotificationService';
 import AppState from './AppState';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import CacheService from './CacheService';
+import E2EEService from './E2EEService';
 
 export interface MessageReaction {
   emoji: string;
@@ -23,6 +24,14 @@ export interface Message {
   replyToId?: string | null;
   replyToMessage?: string | null;
   replyToSenderId?: string | null;
+  isEncrypted?: boolean;
+  encryptionVersion?: string | null;
+  senderCiphertext?: string | null;
+  senderNonce?: string | null;
+  senderEphemeralPublicKey?: string | null;
+  receiverCiphertext?: string | null;
+  receiverNonce?: string | null;
+  receiverEphemeralPublicKey?: string | null;
 }
 
 export interface Conversation {
@@ -40,21 +49,63 @@ export interface Conversation {
 class MessageService {
   private lastCheckedMessageId: string | null = null;
 
+  private async getCurrentUserId(): Promise<string> {
+    const userStr = await AsyncStorage.getItem('@current_user');
+    if (!userStr) {
+      throw new Error('Utilisateur non connecté');
+    }
+    const user = JSON.parse(userStr);
+    if (!user?.id) {
+      throw new Error('Session utilisateur invalide');
+    }
+    return user.id;
+  }
+
+  private async decryptMessages(messages: Message[]): Promise<Message[]> {
+    const currentUserId = await this.getCurrentUserId();
+
+    return Promise.all(messages.map(async message => {
+      if (!message.isEncrypted) {
+        return message;
+      }
+
+      const decrypted = await E2EEService.decryptMessage({
+        currentUserId,
+        senderId: message.senderId,
+        receiverId: message.receiverId,
+        senderCiphertext: message.senderCiphertext,
+        senderNonce: message.senderNonce,
+        senderEphemeralPublicKey: message.senderEphemeralPublicKey,
+        receiverCiphertext: message.receiverCiphertext,
+        receiverNonce: message.receiverNonce,
+        receiverEphemeralPublicKey: message.receiverEphemeralPublicKey,
+      });
+
+      return {
+        ...message,
+        message: decrypted ?? '[Message chiffré indisponible]'
+      };
+    }));
+  }
+
   /**
    * Envoyer un message à un utilisateur
    */
   async sendMessage(receiverId: string, message: string, replyToId?: string): Promise<Message> {
     try {
+      const encrypted = await E2EEService.buildEncryptedPayloadForUsers(message, receiverId);
+
       const response = await ApiClient.post('/messages.php?action=send', {
         receiverId,
-        message,
+        ...encrypted,
         ...(replyToId ? {replyToId} : {}),
       }) as any;
       
       // Invalider le cache des conversations pour forcer un rechargement
       await CacheService.invalidateCache('conversations');
       
-      return response.data;
+      const [decryptedMessage] = await this.decryptMessages([response.data]);
+      return decryptedMessage;
     } catch (error) {
       console.error('Erreur lors de l\'envoi du message:', error);
       throw error;
@@ -66,16 +117,21 @@ class MessageService {
    */
   async sendPhoto(receiverId: string, photoBase64: string, mimeType: string, caption?: string, replyToId?: string): Promise<Message> {
     try {
+      const encryptedCaption = caption
+        ? await E2EEService.buildEncryptedPayloadForUsers(caption, receiverId)
+        : null;
+
       const response = await ApiClient.post('/messages.php?action=send-photo', {
         receiverId,
         photoData: photoBase64,
         mimeType,
-        caption: caption || null,
+        ...(encryptedCaption ? encryptedCaption : {caption: null}),
         ...(replyToId ? {replyToId} : {}),
       }) as any;
 
       await CacheService.invalidateCache('conversations');
-      return response.data;
+      const [decryptedMessage] = await this.decryptMessages([response.data]);
+      return decryptedMessage;
     } catch (error) {
       console.error('Erreur lors de l\'envoi de la photo:', error);
       throw error;
@@ -103,7 +159,7 @@ class MessageService {
         ? `/messages.php?action=conversation&otherUserId=${otherUserId}&before=${encodeURIComponent(before)}`
         : `/messages.php?action=conversation&otherUserId=${otherUserId}`;
       const response = await ApiClient.get(url) as any;
-      return response.data;
+      return await this.decryptMessages(response.data);
     } catch (error) {
       console.error('Erreur lors de la récupération de la conversation:', error);
       throw error;

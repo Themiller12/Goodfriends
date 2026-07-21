@@ -3,6 +3,7 @@
  * @format
  */
 
+import 'react-native-get-random-values';
 import React, {useEffect, useRef} from 'react';
 import {StatusBar, AppState, AppStateStatus} from 'react-native';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
