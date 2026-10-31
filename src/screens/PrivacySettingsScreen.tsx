@@ -3,14 +3,13 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   ScrollView,
   Switch,
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
+import ScreenHeader from '../components/ScreenHeader';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ApiClient from '../services/ApiClient';
 import API_CONFIG from '../config/api';
@@ -112,22 +111,12 @@ const PrivacySettingsScreen: React.FC<PrivacySettingsScreenProps> = ({navigation
 
   return (
     <ScrollView style={styles(theme).container}>
-      <View style={styles(theme).header}>
-        <View style={styles(theme).headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-            <View style={styles(theme).backBtnCircle}>
-              <MaterialIcons name="arrow-back" size={22} color="#383830" />
-            </View>
-          </TouchableOpacity>
-          <View style={{flex: 1}}>
-            <Text style={styles(theme).headerTitle}>Confidentialité</Text>
-            <Text style={styles(theme).headerSubtitle}>Contrôlez qui peut voir vos informations</Text>
-          </View>
-          {(syncing || saving) && (
-            <ActivityIndicator size="small" color={theme.primary} style={{marginLeft: 8}} />
-          )}
-        </View>
-      </View>
+      <ScreenHeader
+        title="Confidentialité"
+        subtitle="Contrôlez qui peut voir vos informations"
+        onBack={() => navigation.goBack()}
+        right={(syncing || saving) ? <ActivityIndicator size="small" color={theme.primary} /> : undefined}
+      />
 
       {/* ── Visibilité du profil ── */}
       <View style={styles(theme).section}>
@@ -232,7 +221,7 @@ const PrivacySettingsScreen: React.FC<PrivacySettingsScreenProps> = ({navigation
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fcf9f0',
+    backgroundColor: theme.background,
   },
   header: {
     backgroundColor: '#fcf9f0',

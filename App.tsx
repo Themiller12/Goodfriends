@@ -10,7 +10,7 @@ import {SafeAreaProvider} from 'react-native-safe-area-context';
 import {GestureHandlerRootView} from 'react-native-gesture-handler';
 import {NavigationContainerRef} from '@react-navigation/native';
 import PushNotification from 'react-native-push-notification';
-import messaging, {
+import {
   getMessaging,
   onNotificationOpenedApp,
   getInitialNotification,
@@ -89,10 +89,9 @@ function App(): React.JSX.Element {
     // Listener Firebase : app complètement fermée, ouverte via notification
     getInitialNotification(getMessaging()).then((remoteMessage) => {
       if (!remoteMessage?.data?.type) return;
-      console.log('[FCM] Notification ouverte (cold start):', remoteMessage);
       // Stocker en attente : le navigator n'est pas encore prêt au moment où cette promesse résout
       pendingNavRef.current = {
-        type: remoteMessage.data.type,
+        type: String(remoteMessage.data.type),
         data: remoteMessage.data as Record<string, string>,
       };
     });
@@ -148,7 +147,7 @@ function App(): React.JSX.Element {
       <GestureHandlerRootView style={{flex: 1}}>
         <SafeAreaProvider>
           <KeyboardProvider>
-            <StatusBar barStyle="light-content" backgroundColor="#2196F3" />
+            <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
             <AppNavigator ref={navigationRef} onReady={handleNavigatorReady} />
           </KeyboardProvider>
         </SafeAreaProvider>

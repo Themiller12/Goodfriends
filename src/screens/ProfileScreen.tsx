@@ -10,12 +10,14 @@ import {
   Platform,
   Image,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import {launchImageLibrary} from 'react-native-image-picker';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
+import ScreenHeader from '../components/ScreenHeader';
 import AuthService from '../services/AuthService';
+import {commitCredentials} from '../services/AutofillService';
+import {PASSWORD_REQUIREMENTS, getPasswordError} from '../utils/passwordPolicy';
 import StorageService from '../services/StorageService';
 import {UserProfile} from '../types';
 import {Neutral, Spacing, Radius, Shadow, Typography, Semantic} from '../theme/designSystem';
@@ -37,6 +39,12 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({navigation}) => {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [loading, setLoading] = useState(false);
   const [photoUri, setPhotoUri] = useState<string | undefined>(undefined);
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPasswords, setShowPasswords] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
 
   useEffect(() => {
     loadProfile();
@@ -127,6 +135,44 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({navigation}) => {
     );
   };
 
+  const closePasswordForm = () => {
+    setShowPasswordForm(false);
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setShowPasswords(false);
+  };
+
+  const handleChangePassword = async () => {
+    if (!currentPassword) {
+      Alert.alert('Erreur', 'Veuillez saisir votre mot de passe actuel');
+      return;
+    }
+
+    const passwordError = getPasswordError(newPassword);
+    if (passwordError) {
+      Alert.alert('Mot de passe trop faible', passwordError);
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      Alert.alert('Erreur', 'Les mots de passe ne correspondent pas');
+      return;
+    }
+
+    setChangingPassword(true);
+    try {
+      await AuthService.changePassword(currentPassword, newPassword);
+      commitCredentials();
+      closePasswordForm();
+      Alert.alert('Succès', 'Votre mot de passe a été modifié');
+    } catch (error: any) {
+      Alert.alert('Erreur', error.message);
+    } finally {
+      setChangingPassword(false);
+    }
+  };
+
   const handleLogout = () => {
     Alert.alert(
       'Déconnexion',
@@ -156,19 +202,11 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({navigation}) => {
     <View style={{flex: 1}}>
       <ScrollView style={S.container} showsVerticalScrollIndicator={false} contentContainerStyle={{paddingBottom: 88}}>
       {/* En-tête */}
-      <View style={S.header}>
-        <View style={S.headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={S.backBtn}>
-            <View style={S.backBtnCircle}>
-              <MaterialIcons name="arrow-back" size={22} color="#383830" />
-            </View>
-          </TouchableOpacity>
-          <View>
-            <Text style={S.headerTitle}>Mon profil</Text>
-            <Text style={S.headerSubtitle}>Gérez vos informations personnelles</Text>
-          </View>
-        </View>
-      </View>
+      <ScreenHeader
+        title="Mon profil"
+        subtitle="Gérez vos informations personnelles"
+        onBack={() => navigation.goBack()}
+      />
 
       {/* Avatar */}
       <View style={S.avatarSection}>
@@ -223,6 +261,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({navigation}) => {
             onChangeText={setEmail}
             keyboardType="email-address"
             autoCapitalize="none"
+            autoComplete="email"
           />
           <View style={S.divider} />
           <Text style={S.label}>Téléphone</Text>
@@ -251,6 +290,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({navigation}) => {
               mode="date"
               display="default"
               onChange={onDateChange}
+              minimumDate={new Date(1900, 0, 1)}
               maximumDate={new Date()}
             />
           )}
@@ -278,6 +318,82 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({navigation}) => {
           </Text>
         </TouchableOpacity>
 
+        <Text style={S.sectionLabel}>Sécurité</Text>
+        <View style={S.card}>
+          {showPasswordForm ? (
+            <>
+              <Text style={S.label}>Mot de passe actuel</Text>
+              <TextInput
+                style={S.input}
+                placeholder="Mot de passe actuel"
+                placeholderTextColor={Neutral[400]}
+                value={currentPassword}
+                onChangeText={setCurrentPassword}
+                secureTextEntry={!showPasswords}
+                autoCapitalize="none"
+                autoComplete="current-password"
+                textContentType="password"
+                importantForAutofill="yes"
+              />
+              <View style={S.divider} />
+              <Text style={S.label}>Nouveau mot de passe</Text>
+              <TextInput
+                style={S.input}
+                placeholder="Nouveau mot de passe"
+                placeholderTextColor={Neutral[400]}
+                value={newPassword}
+                onChangeText={setNewPassword}
+                secureTextEntry={!showPasswords}
+                autoCapitalize="none"
+                autoComplete="new-password"
+                textContentType="newPassword"
+                importantForAutofill="yes"
+              />
+              <Text style={S.hint}>{PASSWORD_REQUIREMENTS}</Text>
+              <View style={S.divider} />
+              <Text style={S.label}>Confirmer le mot de passe</Text>
+              <TextInput
+                style={S.input}
+                placeholder="Confirmer"
+                placeholderTextColor={Neutral[400]}
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry={!showPasswords}
+                autoCapitalize="none"
+                autoComplete="new-password"
+                textContentType="newPassword"
+              />
+              <TouchableOpacity style={S.linkRow} onPress={() => setShowPasswords(v => !v)}>
+                <MaterialIcons
+                  name={showPasswords ? 'visibility-off' : 'visibility'}
+                  size={18}
+                  color={Neutral[500]}
+                />
+                <Text style={S.linkRowText}>
+                  {showPasswords ? 'Masquer les mots de passe' : 'Afficher les mots de passe'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[S.btn, changingPassword && S.btnDisabled]}
+                onPress={handleChangePassword}
+                activeOpacity={0.85}
+                disabled={changingPassword}>
+                <Text style={S.btnText}>
+                  {changingPassword ? 'Modification…' : 'Modifier le mot de passe'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={S.linkRow} onPress={closePasswordForm}>
+                <Text style={S.linkRowText}>Annuler</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <TouchableOpacity style={S.linkRow} onPress={() => setShowPasswordForm(true)}>
+              <MaterialIcons name="lock" size={18} color={theme.primary} />
+              <Text style={[S.linkRowText, {color: theme.primary}]}>Modifier le mot de passe</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
         <TouchableOpacity style={S.btnDanger} onPress={handleLogout} activeOpacity={0.85}>
           <MaterialIcons name="logout" size={18} color={Semantic.error} style={{marginRight: 6}} />
           <Text style={S.btnDangerText}>Déconnexion</Text>
@@ -291,7 +407,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({navigation}) => {
 const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fcf9f0',
+    backgroundColor: theme.background,
   },
   header: {
     backgroundColor: '#fcf9f0',
@@ -449,6 +565,22 @@ const createStyles = (theme: any) => StyleSheet.create({
   btnDangerText: {
     ...Typography.titleSm,
     color: Semantic.error,
+  },
+  hint: {
+    ...Typography.bodySm,
+    color: Neutral[500],
+    marginBottom: Spacing.sm,
+  },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  linkRowText: {
+    ...Typography.body,
+    color: Neutral[600],
+    marginLeft: Spacing.xs,
   },
 });
 

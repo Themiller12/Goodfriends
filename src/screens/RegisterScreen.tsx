@@ -13,8 +13,10 @@ import {
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import AuthService from '../services/AuthService';
+import {commitCredentials} from '../services/AutofillService';
 import {useTheme} from '../context/ThemeContext';
 import {Neutral, Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
+import {PASSWORD_REQUIREMENTS, getPasswordError} from '../utils/passwordPolicy';
 
 interface RegisterScreenProps {
   navigation: any;
@@ -44,14 +46,16 @@ const RegisterScreen: React.FC<RegisterScreenProps> = ({navigation}) => {
       return;
     }
 
-    if (password.length < 6) {
-      Alert.alert('Erreur', 'Le mot de passe doit contenir au moins 6 caractères');
+    const passwordError = getPasswordError(password);
+    if (passwordError) {
+      Alert.alert('Mot de passe trop faible', passwordError);
       return;
     }
 
     setLoading(true);
     try {
       const account = await AuthService.register(email, password, firstName, lastName);
+      commitCredentials();
       
       // Naviguer vers l'écran de vérification
       navigation.navigate('Verification', {
@@ -59,11 +63,7 @@ const RegisterScreen: React.FC<RegisterScreenProps> = ({navigation}) => {
       });
     } catch (error: any) {
       if (error.name === 'NetworkError') {
-        Alert.alert(
-          'Erreur réseau',
-          error.message + '\n\nURL API : ' + 'http://volt-services.fr/DEV/goodfriends/api',
-          [{text: 'OK'}]
-        );
+        Alert.alert('Erreur réseau', error.message, [{text: 'OK'}]);
       } else {
         Alert.alert('Erreur d\'inscription', error.message || 'Une erreur est survenue');
       }
@@ -134,6 +134,9 @@ const RegisterScreen: React.FC<RegisterScreenProps> = ({navigation}) => {
               keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
+              autoComplete="username"
+              textContentType="username"
+              importantForAutofill="yes"
             />
           </View>
 
@@ -142,17 +145,21 @@ const RegisterScreen: React.FC<RegisterScreenProps> = ({navigation}) => {
             <MaterialIcons name="lock" size={20} color={Neutral[400]} style={S.inputIcon} />
             <TextInput
               style={[S.input, S.inputFlex]}
-              placeholder="Min. 6 caractères"
+              placeholder="Mot de passe"
               placeholderTextColor={Neutral[400]}
               value={password}
               onChangeText={setPassword}
               secureTextEntry={!showPassword}
               autoCapitalize="none"
+              autoComplete="new-password"
+              textContentType="newPassword"
+              importantForAutofill="yes"
             />
             <TouchableOpacity onPress={() => setShowPassword(v => !v)} style={S.eyeBtn}>
               <MaterialIcons name={showPassword ? 'visibility-off' : 'visibility'} size={20} color={Neutral[400]} />
             </TouchableOpacity>
           </View>
+          <Text style={S.hint}>{PASSWORD_REQUIREMENTS}</Text>
 
           <Text style={S.label}>Confirmer le mot de passe</Text>
           <View style={S.inputWrapper}>
@@ -165,6 +172,8 @@ const RegisterScreen: React.FC<RegisterScreenProps> = ({navigation}) => {
               onChangeText={setConfirmPassword}
               secureTextEntry={!showConfirm}
               autoCapitalize="none"
+              autoComplete="new-password"
+              textContentType="newPassword"
             />
             <TouchableOpacity onPress={() => setShowConfirm(v => !v)} style={S.eyeBtn}>
               <MaterialIcons name={showConfirm ? 'visibility-off' : 'visibility'} size={20} color={Neutral[400]} />
@@ -286,6 +295,12 @@ const createStyles = (theme: any) => StyleSheet.create({
     ...Typography.titleSm,
     color: '#FFF',
     letterSpacing: 0.3,
+  },
+  hint: {
+    ...Typography.body,
+    color: Neutral[500],
+    marginTop: -Spacing.sm,
+    marginBottom: Spacing.base,
   },
   btnDisabled: {
     backgroundColor: Neutral[300],

@@ -8,11 +8,11 @@ import {
   FlatList,
   Alert,
   Image,
-  StatusBar,
   ActivityIndicator,
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
+import ScreenHeader from '../components/ScreenHeader';
 import {Neutral, Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
 import FriendRequestService, {GoodFriendsUser} from '../services/FriendRequestService';
 
@@ -29,8 +29,8 @@ const SearchUsersScreen: React.FC<SearchUsersScreenProps> = ({navigation}) => {
   const [searched, setSearched] = useState(false);
 
   const handleSearch = async () => {
-    if (!searchQuery.trim()) {
-      Alert.alert('Erreur', 'Veuillez entrer un email ou un numéro de téléphone');
+    if (searchQuery.trim().length < 3) {
+      Alert.alert('Erreur', 'Entrez au moins 3 caractères (email ou numéro de téléphone)');
       return;
     }
 
@@ -119,17 +119,12 @@ const SearchUsersScreen: React.FC<SearchUsersScreenProps> = ({navigation}) => {
 
   return (
     <View style={S.root}>
-      <StatusBar barStyle="light-content" backgroundColor={theme.primary} />
       {/* ── Header ── */}
-      <View style={S.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={S.backButton}>
-          <MaterialIcons name="arrow-back" size={22} color="#FFF" />
-        </TouchableOpacity>
-        <View style={S.headerContent}>
-          <Text style={S.title}>Rechercher des amis</Text>
-          <Text style={S.subtitle}>Par email ou numéro de téléphone</Text>
-        </View>
-      </View>
+      <ScreenHeader
+        title="Rechercher des amis"
+        subtitle="Par email ou numéro de téléphone"
+        onBack={() => navigation.goBack()}
+      />
 
       {/* ── Barre de recherche ── */}
       <View style={S.searchBar}>
@@ -195,7 +190,7 @@ const SearchUsersScreen: React.FC<SearchUsersScreenProps> = ({navigation}) => {
 const styles = (theme: any) => StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: Neutral[50],
+    backgroundColor: theme.background,
   },
   // ── Header ──
   header: {

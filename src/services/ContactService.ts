@@ -1,4 +1,4 @@
-import {Contact, ContactGroup, Relationship, RelationType} from '../types';
+import {Contact, ContactGroup, RelationType} from '../types';
 import StorageService from './StorageService';
 import StorageServiceAPI from './StorageServiceAPI';
 

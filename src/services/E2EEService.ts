@@ -2,12 +2,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import nacl from 'tweetnacl';
 import * as naclUtil from 'tweetnacl-util';
 import ApiClient from './ApiClient';
+import SecureStorage from './SecureStorage';
 
 const KEYS = {
   PUBLIC_KEY: '@e2ee_public_key',
-  SECRET_KEY: '@e2ee_secret_key',
   USER_ID: '@e2ee_user_id',
 };
+
+// La clé privée est dans le Keystore ; l'ancienne clé AsyncStorage est migrée au premier accès.
+const SECRET_KEY_NAME = 'e2ee_secret_key';
+const LEGACY_SECRET_KEY = '@e2ee_secret_key';
 
 type LocalKeyPair = {
   publicKey: string;
@@ -52,19 +56,19 @@ class E2EEService {
   }
 
   private async saveLocalKeyPair(userId: string, keyPair: LocalKeyPair): Promise<void> {
+    await SecureStorage.setItem(SECRET_KEY_NAME, keyPair.secretKey);
     await AsyncStorage.multiSet([
       [KEYS.PUBLIC_KEY, keyPair.publicKey],
-      [KEYS.SECRET_KEY, keyPair.secretKey],
       [KEYS.USER_ID, userId],
     ]);
   }
 
   private async loadLocalKeyPair(): Promise<LocalKeyPair | null> {
-    const values = await AsyncStorage.multiGet([KEYS.PUBLIC_KEY, KEYS.SECRET_KEY, KEYS.USER_ID]);
+    const values = await AsyncStorage.multiGet([KEYS.PUBLIC_KEY, KEYS.USER_ID]);
     const map = new Map(values);
 
     const publicKey = map.get(KEYS.PUBLIC_KEY) || null;
-    const secretKey = map.get(KEYS.SECRET_KEY) || null;
+    const secretKey = await SecureStorage.getItem(SECRET_KEY_NAME, LEGACY_SECRET_KEY);
     const keyUserId = map.get(KEYS.USER_ID) || null;
     const currentUserId = await this.getCurrentUserId();
 

@@ -8,8 +8,45 @@ $db = $database->getConnection();
 $method = $_SERVER['REQUEST_METHOD'];
 $data = json_decode(file_get_contents('php://input'), true);
 
-$userId = verifyToken();
 $action = isset($_GET['action']) ? $_GET['action'] : '';
+
+function signPhotoAccess($messageId, $expires) {
+    return hash_hmac('sha256', 'photo|' . $messageId . '|' . $expires, getJwtSecret());
+}
+
+function signAttachmentAccess($messageId, $expires) {
+    return hash_hmac('sha256', 'attachment|' . $messageId . '|' . $expires, getJwtSecret());
+}
+
+const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+const VOICE_MAX_DURATION_MS = 600000;
+
+// Extensions autorisées pour les fichiers joints ; le type MIME est déduit de l'extension, jamais du client
+const ATTACHMENT_EXTENSIONS = [
+    'pdf' => 'application/pdf',
+    'txt' => 'text/plain',
+    'csv' => 'text/csv',
+    'rtf' => 'application/rtf',
+    'doc' => 'application/msword',
+    'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'xls' => 'application/vnd.ms-excel',
+    'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'ppt' => 'application/vnd.ms-powerpoint',
+    'pptx' => 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'odt' => 'application/vnd.oasis.opendocument.text',
+    'ods' => 'application/vnd.oasis.opendocument.spreadsheet',
+    'odp' => 'application/vnd.oasis.opendocument.presentation',
+    'zip' => 'application/zip',
+    'mp3' => 'audio/mpeg',
+    'm4a' => 'audio/mp4',
+    'wav' => 'audio/wav',
+    'mp4' => 'video/mp4',
+];
+
+// Un lien signé temporaire (photo-link / attachment-link) remplace le jeton pour télécharger un média
+$signedMediaRequest = $method === 'GET' && in_array($action, ['photo', 'attachment'], true) && isset($_GET['exp'], $_GET['sig']);
+$signedPhotoRequest = $signedMediaRequest;
+$userId = $signedMediaRequest ? null : verifyToken();
 
 function areUsersMutualFriends(PDO $db, string $userA, string $userB): bool {
     $stmt = $db->prepare(
@@ -42,6 +79,14 @@ function mapMessageRow(array $row): array {
         'receiverNonce' => $row['receiver_nonce'] ?? null,
         'receiverEphemeralPublicKey' => $row['receiver_ephemeral_public_key'] ?? null,
         'photoUrl' => $row['photo_url'] ?? null,
+        'attachmentType' => $row['attachment_type'] ?? null,
+        'attachmentName' => $row['attachment_name'] ?? null,
+        'attachmentMime' => $row['attachment_mime'] ?? null,
+        'attachmentSize' => isset($row['attachment_size']) ? (int)$row['attachment_size'] : null,
+        'attachmentDurationMs' => isset($row['attachment_duration_ms']) ? (int)$row['attachment_duration_ms'] : null,
+        'attachmentUrl' => !empty($row['attachment_type'])
+            ? rtrim(API_BASE_URL, '/') . '/messages.php?action=attachment&id=' . $row['id']
+            : null,
         'isRead' => (bool)$row['is_read'],
         'createdAt' => $row['created_at'],
         'senderEmail' => $row['sender_email'] ?? null,
@@ -75,6 +120,153 @@ try {
                 sendResponse(true, 'Clé E2EE récupérée', [
                     'userId' => $targetUserId,
                     'publicKey' => $keyRow['e2ee_public_key'] ?: null,
+                ]);
+            }
+
+            if ($action === 'photo') {
+                $photoMessageId = isset($_GET['id']) ? (string)$_GET['id'] : '';
+                if (!preg_match('/^[a-zA-Z0-9]{10,64}$/', $photoMessageId)) {
+                    sendResponse(false, 'Photo introuvable', null, 404);
+                }
+
+                // Seuls l'expéditeur et le destinataire peuvent lire la photo (ou un lien signé valide)
+                if ($signedPhotoRequest) {
+                    $expires = (int)$_GET['exp'];
+                    if ($expires < time() || !hash_equals(signPhotoAccess($photoMessageId, $expires), (string)$_GET['sig'])) {
+                        sendResponse(false, 'Lien expiré', null, 403);
+                    }
+                    $photoStmt = $db->prepare("SELECT 1 FROM messages WHERE id = :id");
+                    $photoStmt->execute([':id' => $photoMessageId]);
+                } else {
+                    $photoStmt = $db->prepare(
+                        "SELECT 1 FROM messages WHERE id = :id AND (sender_id = :uid1 OR receiver_id = :uid2)"
+                    );
+                    $photoStmt->execute([':id' => $photoMessageId, ':uid1' => $userId, ':uid2' => $userId]);
+                }
+                $photoFile = __DIR__ . '/uploads/messages/' . $photoMessageId . '.enc';
+                if ($photoStmt->rowCount() === 0 || !is_file($photoFile)) {
+                    sendResponse(false, 'Photo introuvable', null, 404);
+                }
+
+                $decrypted = decryptAtRest(file_get_contents($photoFile));
+                $separator = $decrypted === false ? false : strpos($decrypted, "\n");
+                $photoMime = $separator === false ? '' : substr($decrypted, 0, $separator);
+                if (!in_array($photoMime, ['image/jpeg', 'image/png', 'image/webp', 'image/gif'], true)) {
+                    error_log('[API] Photo illisible ou altérée : ' . $photoMessageId);
+                    sendResponse(false, 'Photo introuvable', null, 404);
+                }
+
+                header('Content-Type: ' . $photoMime);
+                header('Cache-Control: private, max-age=86400');
+                echo substr($decrypted, $separator + 1);
+                exit();
+            }
+
+            if ($action === 'photo-link') {
+                $linkMessageId = isset($_GET['id']) ? (string)$_GET['id'] : '';
+                if (!preg_match('/^[a-zA-Z0-9]{10,64}$/', $linkMessageId)) {
+                    sendResponse(false, 'Photo introuvable', null, 404);
+                }
+                $linkStmt = $db->prepare(
+                    "SELECT 1 FROM messages WHERE id = :id AND (sender_id = :uid1 OR receiver_id = :uid2)"
+                );
+                $linkStmt->execute([':id' => $linkMessageId, ':uid1' => $userId, ':uid2' => $userId]);
+                if ($linkStmt->rowCount() === 0) {
+                    sendResponse(false, 'Photo introuvable', null, 404);
+                }
+                $expires = time() + 120;
+                sendResponse(true, 'Lien généré', [
+                    'url' => rtrim(API_BASE_URL, '/') . '/messages.php?action=photo&id=' . $linkMessageId
+                        . '&exp=' . $expires . '&sig=' . signPhotoAccess($linkMessageId, $expires),
+                ]);
+            }
+
+            if ($action === 'attachment') {
+                $attachmentId = isset($_GET['id']) ? (string)$_GET['id'] : '';
+                if (!preg_match('/^[a-zA-Z0-9]{10,64}$/', $attachmentId)) {
+                    sendResponse(false, 'Fichier introuvable', null, 404);
+                }
+
+                // Participants de la conversation uniquement (ou lien signé valide)
+                if ($signedMediaRequest) {
+                    $expires = (int)$_GET['exp'];
+                    if ($expires < time() || !hash_equals(signAttachmentAccess($attachmentId, $expires), (string)$_GET['sig'])) {
+                        sendResponse(false, 'Lien expiré', null, 403);
+                    }
+                    $attStmt = $db->prepare("SELECT attachment_type, attachment_name FROM messages WHERE id = :id AND attachment_type IS NOT NULL");
+                    $attStmt->execute([':id' => $attachmentId]);
+                } else {
+                    $attStmt = $db->prepare(
+                        "SELECT attachment_type, attachment_name FROM messages
+                         WHERE id = :id AND attachment_type IS NOT NULL AND (sender_id = :uid1 OR receiver_id = :uid2)"
+                    );
+                    $attStmt->execute([':id' => $attachmentId, ':uid1' => $userId, ':uid2' => $userId]);
+                }
+                $attRow = $attStmt->fetch(PDO::FETCH_ASSOC);
+                $attFile = __DIR__ . '/uploads/messages/' . $attachmentId . '.att.enc';
+                if (!$attRow || !is_file($attFile)) {
+                    sendResponse(false, 'Fichier introuvable', null, 404);
+                }
+
+                $decrypted = decryptAtRest(file_get_contents($attFile));
+                $separator = $decrypted === false ? false : strpos($decrypted, "\n");
+                if ($separator === false) {
+                    error_log('[API] Pièce jointe illisible ou altérée : ' . $attachmentId);
+                    sendResponse(false, 'Fichier introuvable', null, 404);
+                }
+                $attMime = substr($decrypted, 0, $separator);
+                $body = substr($decrypted, $separator + 1);
+                $total = strlen($body);
+                $start = 0;
+                $end = $total - 1;
+
+                // Lecture partielle (nécessaire au lecteur audio d'Android)
+                if (isset($_SERVER['HTTP_RANGE']) && preg_match('/^bytes=(\d*)-(\d*)$/', $_SERVER['HTTP_RANGE'], $range)) {
+                    if ($range[1] !== '') {
+                        $start = (int)$range[1];
+                        if ($range[2] !== '') {
+                            $end = min((int)$range[2], $total - 1);
+                        }
+                    } elseif ($range[2] !== '') {
+                        $start = max(0, $total - (int)$range[2]);
+                    }
+                    if ($start > $end || $start >= $total) {
+                        http_response_code(416);
+                        header('Content-Range: bytes */' . $total);
+                        exit();
+                    }
+                    http_response_code(206);
+                    header('Content-Range: bytes ' . $start . '-' . $end . '/' . $total);
+                }
+
+                $isVoice = $attRow['attachment_type'] === 'voice';
+                $safeName = preg_replace('/[^A-Za-z0-9._-]+/', '_', (string)$attRow['attachment_name']);
+                header('Content-Type: ' . $attMime);
+                header('Content-Disposition: ' . ($isVoice ? 'inline' : 'attachment')
+                    . '; filename="' . $safeName . '"; filename*=UTF-8\'\'' . rawurlencode((string)$attRow['attachment_name']));
+                header('Accept-Ranges: bytes');
+                header('Content-Length: ' . ($end - $start + 1));
+                header('Cache-Control: private, max-age=86400');
+                echo substr($body, $start, $end - $start + 1);
+                exit();
+            }
+
+            if ($action === 'attachment-link') {
+                $linkAttachmentId = isset($_GET['id']) ? (string)$_GET['id'] : '';
+                if (!preg_match('/^[a-zA-Z0-9]{10,64}$/', $linkAttachmentId)) {
+                    sendResponse(false, 'Fichier introuvable', null, 404);
+                }
+                $linkStmt = $db->prepare(
+                    "SELECT 1 FROM messages WHERE id = :id AND attachment_type IS NOT NULL AND (sender_id = :uid1 OR receiver_id = :uid2)"
+                );
+                $linkStmt->execute([':id' => $linkAttachmentId, ':uid1' => $userId, ':uid2' => $userId]);
+                if ($linkStmt->rowCount() === 0) {
+                    sendResponse(false, 'Fichier introuvable', null, 404);
+                }
+                $expires = time() + 120;
+                sendResponse(true, 'Lien généré', [
+                    'url' => rtrim(API_BASE_URL, '/') . '/messages.php?action=attachment&id=' . $linkAttachmentId
+                        . '&exp=' . $expires . '&sig=' . signAttachmentAccess($linkAttachmentId, $expires),
                 ]);
             }
 
@@ -447,17 +639,14 @@ try {
                     sendResponse(false, 'Type de fichier non autorisé', null, 400);
                 }
 
-                $extensions = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif'];
-                $ext = $extensions[$mimeType];
-
                 $uploadDir = __DIR__ . '/uploads/messages/';
                 if (!is_dir($uploadDir)) {
-                    mkdir($uploadDir, 0755, true);
+                    mkdir($uploadDir, 0750, true);
                 }
 
-                $filename = generateId() . '.' . $ext;
-                $filepath = $uploadDir . $filename;
-                $imageData = base64_decode($photoData);
+                $messageId = generateId();
+                $filepath = $uploadDir . $messageId . '.enc';
+                $imageData = base64_decode($photoData, true);
 
                 if ($imageData === false || strlen($imageData) < 100) {
                     sendResponse(false, 'Données image invalides', null, 400);
@@ -467,15 +656,19 @@ try {
                     sendResponse(false, 'Image trop volumineuse (max 5 Mo)', null, 413);
                 }
 
-                if (file_put_contents($filepath, $imageData) === false) {
+                // Le contenu réel doit correspondre au type déclaré
+                if (class_exists('finfo') && (new finfo(FILEINFO_MIME_TYPE))->buffer($imageData) !== $mimeType) {
+                    sendResponse(false, 'Type de fichier non autorisé', null, 400);
+                }
+
+                // Fichier chiffré au repos : type MIME + contenu, jamais servi directement par le serveur web
+                if (file_put_contents($filepath, encryptAtRest($mimeType . "\n" . $imageData)) === false) {
                     sendResponse(false, 'Erreur lors de la sauvegarde de l\'image', null, 500);
                 }
 
-                $baseUrl = 'https://volt-services.fr/DEV/goodfriends/api';
-                $photoUrl = $baseUrl . '/uploads/messages/' . $filename;
+                $photoUrl = rtrim(API_BASE_URL, '/') . '/messages.php?action=photo&id=' . $messageId;
 
                 $replyToId = isset($data['replyToId']) && !empty($data['replyToId']) ? $data['replyToId'] : null;
-                $messageId = generateId();
 
                 $stmt = $db->prepare(
                     "INSERT INTO messages (
@@ -548,6 +741,131 @@ try {
                 }
 
                 sendResponse(true, 'Photo envoyée', mapMessageRow($row), 201);
+            }
+
+            if ($action === 'send-attachment') {
+                if (!isset($data['receiverId'], $data['kind'], $data['data']) || !is_string($data['receiverId'])
+                    || !is_string($data['kind']) || !is_string($data['data'])) {
+                    sendResponse(false, 'receiverId, kind et data requis', null, 400);
+                }
+
+                $receiverId = $data['receiverId'];
+                $kind = $data['kind'];
+                if (!in_array($kind, ['voice', 'file'], true)) {
+                    sendResponse(false, 'Type de pièce jointe invalide', null, 400);
+                }
+
+                if (!areUsersMutualFriends($db, $userId, $receiverId)) {
+                    sendResponse(false, 'Vous ne pouvez envoyer des messages qu\'aux amis.', null, 403);
+                }
+
+                $binary = base64_decode($data['data'], true);
+                if ($binary === false || strlen($binary) < 1) {
+                    sendResponse(false, 'Données invalides', null, 400);
+                }
+                if (strlen($binary) > ATTACHMENT_MAX_BYTES) {
+                    sendResponse(false, 'Fichier trop volumineux (max 5 Mo)', null, 413);
+                }
+
+                $durationMs = null;
+                if ($kind === 'voice') {
+                    // Enregistrement AAC dans un conteneur MP4 (.m4a)
+                    if (class_exists('finfo')
+                        && !in_array((new finfo(FILEINFO_MIME_TYPE))->buffer($binary), ['audio/mp4', 'video/mp4', 'audio/x-m4a', 'audio/aac', 'audio/mpeg'], true)) {
+                        sendResponse(false, 'Format audio non autorisé', null, 400);
+                    }
+                    $attachmentMime = 'audio/mp4';
+                    $attachmentName = 'Message vocal.m4a';
+                    $durationMs = max(0, min(VOICE_MAX_DURATION_MS, (int)($data['durationMs'] ?? 0)));
+                    $messageText = '🎤 Message vocal';
+                } else {
+                    $rawName = isset($data['fileName']) && is_string($data['fileName']) ? trim($data['fileName']) : '';
+                    $attachmentName = mb_substr(preg_replace('/[\x00-\x1F\x7F\\\\\/:*?"<>|]+/u', '_', $rawName), 0, 150);
+                    $extension = strtolower(pathinfo($attachmentName, PATHINFO_EXTENSION));
+                    if ($attachmentName === '' || !isset(ATTACHMENT_EXTENSIONS[$extension])) {
+                        sendResponse(false, 'Type de fichier non autorisé', null, 400);
+                    }
+                    $attachmentMime = ATTACHMENT_EXTENSIONS[$extension];
+                    $messageText = '📎 ' . $attachmentName;
+                }
+
+                $uploadDir = __DIR__ . '/uploads/messages/';
+                if (!is_dir($uploadDir)) {
+                    mkdir($uploadDir, 0750, true);
+                }
+
+                $messageId = generateId();
+                $filepath = $uploadDir . $messageId . '.att.enc';
+                if (file_put_contents($filepath, encryptAtRest($attachmentMime . "\n" . $binary)) === false) {
+                    sendResponse(false, 'Erreur lors de la sauvegarde du fichier', null, 500);
+                }
+
+                $replyToId = isset($data['replyToId']) && !empty($data['replyToId']) ? $data['replyToId'] : null;
+                $attachmentSize = strlen($binary);
+
+                $stmt = $db->prepare(
+                    "INSERT INTO messages (
+                        id, sender_id, receiver_id, message, reply_to_id, is_read, created_at, is_encrypted,
+                        attachment_type, attachment_name, attachment_mime, attachment_size, attachment_duration_ms
+                    ) VALUES (
+                        :id, :sender_id, :receiver_id, :message, :reply_to_id, FALSE, NOW(), 0,
+                        :attachment_type, :attachment_name, :attachment_mime, :attachment_size, :attachment_duration_ms
+                    )"
+                );
+                try {
+                    $stmt->execute([
+                        ':id' => $messageId,
+                        ':sender_id' => $userId,
+                        ':receiver_id' => $receiverId,
+                        ':message' => $messageText,
+                        ':reply_to_id' => $replyToId,
+                        ':attachment_type' => $kind,
+                        ':attachment_name' => $attachmentName,
+                        ':attachment_mime' => $attachmentMime,
+                        ':attachment_size' => $attachmentSize,
+                        ':attachment_duration_ms' => $durationMs,
+                    ]);
+                } catch (Exception $e) {
+                    @unlink($filepath);
+                    throw $e;
+                }
+
+                $stmt = $db->prepare(
+                    "SELECT m.*, u1.email as sender_email, u2.email as receiver_email,
+                            up1.first_name as sender_first_name, up1.last_name as sender_last_name
+                     FROM messages m
+                     LEFT JOIN users u1 ON m.sender_id = u1.id
+                     LEFT JOIN users u2 ON m.receiver_id = u2.id
+                     LEFT JOIN user_profiles up1 ON u1.id = up1.user_id
+                     WHERE m.id = :id"
+                );
+                $stmt->bindParam(':id', $messageId);
+                $stmt->execute();
+                $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                try {
+                    $fcmService = new FCMService();
+                    $senderFirstName = trim($row['sender_first_name'] ?? '');
+                    $senderLastName = trim($row['sender_last_name'] ?? '');
+                    $senderName = $senderFirstName || $senderLastName
+                        ? trim("$senderFirstName $senderLastName")
+                        : $row['sender_email'];
+                    $conversationId = min($userId, $receiverId) . '_' . max($userId, $receiverId);
+                    $fcmService->sendMessageNotification(
+                        $db,
+                        $receiverId,
+                        $userId,
+                        $senderFirstName,
+                        $senderLastName,
+                        $senderName,
+                        $kind === 'voice' ? '🎤 Message vocal' : '📎 Fichier',
+                        $conversationId
+                    );
+                } catch (Exception $e) {
+                    error_log('FCM notification error: ' . $e->getMessage());
+                }
+
+                sendResponse(true, 'Pièce jointe envoyée', mapMessageRow($row), 201);
             }
 
             if ($action === 'react') {
@@ -692,7 +1010,7 @@ try {
             break;
     }
 } catch (Exception $e) {
-    sendResponse(false, 'Erreur serveur: ' . $e->getMessage(), null, 500);
+    sendServerError($e);
 }
 
 sendResponse(false, 'Action non reconnue', null, 400);

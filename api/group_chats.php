@@ -11,6 +11,28 @@ $data = json_decode(file_get_contents('php://input'), true);
 $userId = verifyToken();
 $action = isset($_GET['action']) ? $_GET['action'] : '';
 
+const GROUP_MAX_MEMBERS = 50;
+const GROUP_MAX_TEXT_LENGTH = 5000;
+const GROUP_MAX_IMAGE_BASE64_LENGTH = 7000000;
+
+function areMutualFriends(PDO $db, $userA, $userB) {
+    $stmt = $db->prepare(
+        "SELECT 1 FROM friend_requests
+         WHERE ((sender_id = :a1 AND receiver_id = :b1) OR (sender_id = :b2 AND receiver_id = :a2))
+           AND status = 'accepted'
+         LIMIT 1"
+    );
+    $stmt->execute([':a1' => $userA, ':b1' => $userB, ':b2' => $userB, ':a2' => $userA]);
+    return $stmt->rowCount() > 0;
+}
+
+function getUserDisplayName(PDO $db, $userId) {
+    $stmt = $db->prepare('SELECT first_name, last_name FROM users WHERE id = :uid');
+    $stmt->execute([':uid' => $userId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return trim(($row['first_name'] ?? '') . ' ' . ($row['last_name'] ?? ''));
+}
+
 try {
     switch ($method) {
 
@@ -44,6 +66,15 @@ try {
                 );
                 $stmt->execute([':gid' => $groupId]);
                 $messages = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                // Images chiffrées au repos (les anciennes, en clair, sont renvoyées telles quelles)
+                foreach ($messages as &$imgMsg) {
+                    if (is_string($imgMsg['imageBase64']) && strpos($imgMsg['imageBase64'], 'enc1:') === 0) {
+                        $plain = decryptAtRest(base64_decode(substr($imgMsg['imageBase64'], 5)));
+                        $imgMsg['imageBase64'] = $plain === false ? null : $plain;
+                    }
+                }
+                unset($imgMsg);
 
                 // Ajouter les réactions pour chaque message
                 if (!empty($messages)) {
@@ -244,6 +275,17 @@ try {
                 if (empty($groupId) || (empty($text) && empty($imageBase64))) {
                     sendResponse(false, 'groupId et text ou imageBase64 requis', null, 400);
                 }
+                if (!is_string($text) || mb_strlen($text) > GROUP_MAX_TEXT_LENGTH) {
+                    sendResponse(false, 'Message trop long', null, 400);
+                }
+                if (!empty($imageBase64)) {
+                    if (!is_string($imageBase64) || strlen($imageBase64) > GROUP_MAX_IMAGE_BASE64_LENGTH) {
+                        sendResponse(false, 'Image trop volumineuse', null, 413);
+                    }
+                    if (!in_array($imageMime, ['image/jpeg', 'image/png', 'image/webp', 'image/gif'], true)) {
+                        sendResponse(false, 'Type de fichier non autorisé', null, 400);
+                    }
+                }
 
                 // Vérifier membership
                 $checkStmt = $db->prepare(
@@ -255,7 +297,7 @@ try {
                 }
 
                 $msgId           = uniqid('m', true) . bin2hex(random_bytes(4));
-                $senderName      = $data['senderName'] ?? '';
+                $senderName      = getUserDisplayName($db, $userId);
                 $replyToId       = $data['replyToId'] ?? null;
                 $replyToText     = $data['replyToText'] ?? null;
                 $replyToSenderName = $data['replyToSenderName'] ?? null;
@@ -271,7 +313,7 @@ try {
                     ':sid'     => $userId,
                     ':sname'   => $senderName,
                     ':msg'     => !empty($text) ? $text : null,
-                    ':imgdata' => $imageBase64,
+                    ':imgdata' => !empty($imageBase64) ? 'enc1:' . base64_encode(encryptAtRest($imageBase64)) : null,
                     ':imgmime' => $imageMime,
                     ':rId'     => $replyToId,
                     ':rText'   => $replyToText,
@@ -300,8 +342,27 @@ try {
             // Créer un groupe
             $name    = $data['name'] ?? '';
             $members = $data['members'] ?? [];
-            if (empty($name) || empty($members)) {
+            if (empty($name) || empty($members) || !is_array($members)) {
                 sendResponse(false, 'name et members requis', null, 400);
+            }
+            if (!is_string($name) || mb_strlen($name) > 100) {
+                sendResponse(false, 'Nom du groupe invalide', null, 400);
+            }
+
+            // Seuls les amis du créateur peuvent être ajoutés (identité relue en base, jamais fournie par le client)
+            $memberIds = [];
+            foreach (array_slice($members, 0, GROUP_MAX_MEMBERS) as $m) {
+                $memberId = is_array($m) ? ($m['userId'] ?? '') : '';
+                if (!is_string($memberId) || $memberId === '' || $memberId === $userId || isset($memberIds[$memberId])) {
+                    continue;
+                }
+                if (areMutualFriends($db, $userId, $memberId)) {
+                    $memberIds[$memberId] = true;
+                }
+            }
+            $memberIds = array_keys($memberIds);
+            if (empty($memberIds)) {
+                sendResponse(false, 'Seuls vos amis peuvent être ajoutés à un groupe', null, 400);
             }
 
             $groupId = uniqid('gc', true);
@@ -321,17 +382,10 @@ try {
             // Ajouter les autres membres
             $mStmt = $db->prepare(
                 "INSERT IGNORE INTO group_chat_members (group_id, user_id, first_name, last_name, photo)
-                 VALUES (:gid, :uid, :fn, :ln, :photo)"
+                 SELECT :gid, id, first_name, last_name, photo FROM users WHERE id = :uid"
             );
-            foreach ($members as $m) {
-                if (empty($m['userId'])) continue;
-                $mStmt->execute([
-                    ':gid'   => $groupId,
-                    ':uid'   => $m['userId'],
-                    ':fn'    => $m['firstName'] ?? '',
-                    ':ln'    => $m['lastName'] ?? '',
-                    ':photo' => $m['photo'] ?? null,
-                ]);
+            foreach ($memberIds as $memberId) {
+                $mStmt->execute([':gid' => $groupId, ':uid' => $memberId]);
             }
 
             // Récupérer les membres insérés
@@ -349,16 +403,15 @@ try {
                 $creatorStmt->execute([':uid' => $userId]);
                 $creator = $creatorStmt->fetch(PDO::FETCH_ASSOC);
                 $creatorName = trim(($creator['first_name'] ?? '') . ' ' . ($creator['last_name'] ?? '')) ?: 'Quelqu\'un';
-                foreach ($members as $m) {
-                    if (empty($m['userId']) || $m['userId'] === $userId) continue;
-                    $token = $fcm->getUserToken($db, $m['userId']);
+                foreach ($memberIds as $memberId) {
+                    $token = $fcm->getUserToken($db, $memberId);
                     if ($token) {
                         $fcm->sendNotification(
                             $token,
                             'Nouveau groupe',
                             "$creatorName vous a ajouté au groupe \"$name\"",
                             ['type' => 'group_added', 'groupId' => $groupId, 'groupName' => $name],
-                            'group_added_' . $groupId . '_' . $m['userId']
+                            'group_added_' . $groupId . '_' . $memberId
                         );
                     }
                 }
@@ -439,5 +492,5 @@ try {
             sendResponse(false, 'Méthode non autorisée', null, 405);
     }
 } catch (Exception $e) {
-    sendResponse(false, 'Erreur serveur : ' . $e->getMessage(), null, 500);
+    sendServerError($e);
 }

@@ -8,8 +8,8 @@ import {
   Switch,
   Alert,
 } from 'react-native';
-import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
+import ScreenHeader from '../components/ScreenHeader';
 import {Neutral, Spacing, Radius, Shadow, Typography, Semantic} from '../theme/designSystem';
 import NotificationService from '../services/NotificationService';
 import MessageService from '../services/MessageService';
@@ -119,19 +119,11 @@ const NotificationSettingsScreen: React.FC<NotificationSettingsScreenProps> = ({
 
   return (
     <ScrollView style={styles(theme).container}>
-      <View style={styles(theme).header}>
-        <View style={styles(theme).headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-            <View style={styles(theme).backBtnCircle}>
-              <MaterialIcons name="arrow-back" size={22} color="#383830" />
-            </View>
-          </TouchableOpacity>
-          <View>
-            <Text style={styles(theme).headerTitle}>Notifications</Text>
-            <Text style={styles(theme).headerSubtitle}>Gérez vos alertes et rappels</Text>
-          </View>
-        </View>
-      </View>
+      <ScreenHeader
+        title="Notifications"
+        subtitle="Gérez vos alertes et rappels"
+        onBack={() => navigation.goBack()}
+      />
 
       <View style={styles(theme).section}>
         <Text style={styles(theme).sectionTitle}>Notifications Push</Text>
@@ -203,7 +195,7 @@ const NotificationSettingsScreen: React.FC<NotificationSettingsScreenProps> = ({
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fcf9f0',
+    backgroundColor: theme.background,
   },
   header: {
     backgroundColor: '#fcf9f0',

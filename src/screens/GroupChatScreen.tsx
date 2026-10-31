@@ -5,10 +5,10 @@ import {
   TextInput,
   FlatList,
   TouchableOpacity,
+  StatusBar,
   StyleSheet,
   Platform,
   Alert,
-  Modal,
   ScrollView,
   Image,
   Animated,
@@ -19,12 +19,13 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import Modal from '../components/AppModal';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAvoidingView, KeyboardEvents } from 'react-native-keyboard-controller';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { useTheme } from '../context/ThemeContext';
-import { Neutral, Spacing, Radius } from '../theme/designSystem';
+import { Neutral } from '../theme/designSystem';
 import { GroupChat, GroupMessage, GroupMember, GroupMessageReaction } from '../types';
 import GroupChatService from '../services/GroupChatService';
 import AuthService from '../services/AuthService';
@@ -501,6 +502,7 @@ const GroupChatScreen: React.FC = () => {
 
   return (
     <View style={S.container}>
+      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
       {/* Header — fixed, never moves */}
       <View style={[S.header, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={S.backBtn}>

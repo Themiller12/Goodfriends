@@ -1,16 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Configuration pour autoriser le trafic cleartext (HTTP) -->
-    <base-config cleartextTrafficPermitted="true">
+    <!-- HTTPS uniquement : l'API est servie en HTTPS -->
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
     
-    <!-- Domaines spécifiques autorisés pour cleartext -->
+    <!-- Développement local : émulateur Android et machine hôte -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">volt-services.fr</domain>
-        <domain includeSubdomains="true">10.0.2.2</domain>
-        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <domain includeSubdomains="false">localhost</domain>
     </domain-config>
 </network-security-config>

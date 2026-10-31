@@ -7,13 +7,15 @@ import {
   StyleSheet,
   FlatList,
   Alert,
-  Modal,
   ScrollView,
   Image,
 } from 'react-native';
 import {Picker} from '@react-native-picker/picker';
+import Modal from '../components/AppModal';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import ScreenHeader from '../components/ScreenHeader';
 import {useTheme} from '../context/ThemeContext';
+import {Neutral} from '../theme/designSystem';
 import {ContactGroup, GroupType, Contact} from '../types';
 import StorageService from '../services/StorageService';
 import ContactService from '../services/ContactService';
@@ -187,25 +189,17 @@ const MyGroupsScreen: React.FC<MyGroupsScreenProps> = ({navigation}) => {
           <Text style={styles(theme).contactEmail}>{item.email}</Text>
         )}
       </View>
-      <Text style={styles(theme).chevron}>›</Text>
+      <MaterialIcons name="chevron-right" size={22} color={Neutral[300]} />
     </TouchableOpacity>
   );
 
   return (
     <View style={styles(theme).container}>
-      <View style={styles(theme).header}>
-        <View style={styles(theme).headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-            <View style={styles(theme).backBtnCircle}>
-              <MaterialIcons name="arrow-back" size={22} color="#383830" />
-            </View>
-          </TouchableOpacity>
-          <View>
-            <Text style={styles(theme).headerTitle}>Mes groupes</Text>
-            <Text style={styles(theme).headerSubtitle}>Organisez vos contacts en groupes</Text>
-          </View>
-        </View>
-      </View>
+      <ScreenHeader
+        title="Mes groupes"
+        subtitle="Organisez vos contacts en groupes"
+        onBack={() => navigation.goBack()}
+      />
 
       <FlatList
         data={groups}
@@ -214,7 +208,7 @@ const MyGroupsScreen: React.FC<MyGroupsScreenProps> = ({navigation}) => {
         contentContainerStyle={styles(theme).listContent}
         ListEmptyComponent={
           <View style={styles(theme).emptyContainer}>
-            <Text style={styles(theme).emptyIcon}>📁</Text>
+            <MaterialIcons name="folder-open" size={48} color={Neutral[300]} />
             <Text style={styles(theme).emptyText}>Aucun groupe</Text>
             <Text style={styles(theme).emptySubtext}>
               Créez votre premier groupe pour organiser vos contacts
@@ -342,7 +336,7 @@ const MyGroupsScreen: React.FC<MyGroupsScreenProps> = ({navigation}) => {
               />
             ) : (
               <View style={styles(theme).emptyContactsContainer}>
-                <Text style={styles(theme).emptyIcon}>📭</Text>
+                <MaterialIcons name="inbox" size={48} color={Neutral[300]} />
                 <Text style={styles(theme).emptyText}>Aucun contact dans ce groupe</Text>
               </View>
             )}
@@ -356,7 +350,7 @@ const MyGroupsScreen: React.FC<MyGroupsScreenProps> = ({navigation}) => {
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fcf9f0',
+    backgroundColor: theme.background,
   },
   header: {
     backgroundColor: '#fcf9f0',

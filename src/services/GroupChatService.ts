@@ -1,5 +1,5 @@
 ﻿import AsyncStorage from '@react-native-async-storage/async-storage';
-import { GroupChat, GroupMember, GroupMessage } from '../types';
+import { GroupChat, GroupMember, GroupMessage, GroupMessageReaction } from '../types';
 import ApiClient from './ApiClient';
 import API_CONFIG from '../config/api';
 

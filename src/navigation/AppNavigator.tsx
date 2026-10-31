@@ -1,7 +1,7 @@
 import React, {useEffect, useState, useCallback, useRef, forwardRef} from 'react';
 import {NavigationContainer} from '@react-navigation/native';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
-import {BackHandler, Alert, View} from 'react-native';
+import {Alert, View} from 'react-native';
 import NavPill from '../components/NavPill';
 import AuthService from '../services/AuthService';
 import OnlineStatusService from '../services/OnlineStatusService';
@@ -9,6 +9,7 @@ import OnlineStatusService from '../services/OnlineStatusService';
 // Screens
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
+import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
 import VerificationScreen from '../screens/VerificationScreen';
 import DashboardScreen from '../screens/DashboardScreen';
 import HomeScreen from '../screens/HomeScreen';
@@ -29,6 +30,7 @@ import ThemeSettingsScreen from '../screens/ThemeSettingsScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
 import PrivacySettingsScreen from '../screens/PrivacySettingsScreen';
 import BirthdaysScreen from '../screens/BirthdaysScreen';
+import {useTheme} from '../context/ThemeContext';
 
 const Stack = createNativeStackNavigator();
 
@@ -42,6 +44,7 @@ const getActiveRouteName = (state: any): string => {
 };
 
 const AppNavigator = forwardRef<any, {onReady?: () => void}>((props, ref) => {
+  const {theme} = useTheme();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [activeRoute, setActiveRoute] = useState('');
@@ -157,7 +160,7 @@ const AppNavigator = forwardRef<any, {onReady?: () => void}>((props, ref) => {
         initialRouteName={isLoggedIn ? 'Home' : 'Login'}
         screenOptions={() => ({
           headerStyle: {
-            backgroundColor: '#2196F3',
+            backgroundColor: theme.primary,
           },
           headerTintColor: '#fff',
           headerTitleStyle: {
@@ -178,6 +181,11 @@ const AppNavigator = forwardRef<any, {onReady?: () => void}>((props, ref) => {
             title: 'Créer un compte',
             headerBackTitle: 'Retour',
           }}
+        />
+        <Stack.Screen
+          name="ForgotPassword"
+          component={ForgotPasswordScreen}
+          options={{headerShown: false}}
         />
         <Stack.Screen
           name="Verification"

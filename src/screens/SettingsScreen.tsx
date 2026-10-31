@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
+import ScreenHeader from '../components/ScreenHeader';
 import {Neutral, Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
 
 interface SettingsScreenProps {
@@ -79,15 +80,11 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({navigation}) => {
   return (
     <ScrollView style={S.container} showsVerticalScrollIndicator={false}>
       {/* En-tête */}
-      <View style={S.header}>
-        <View style={S.headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={S.backBtn}>
-            <MaterialIcons name="arrow-back" size={22} color="#FFF" />
-          </TouchableOpacity>
-          <Text style={S.headerTitle}>Paramètres</Text>
-        </View>
-        <Text style={S.headerSubtitle}>Personnalisez votre expérience</Text>
-      </View>
+      <ScreenHeader
+        title="Paramètres"
+        subtitle="Personnalisez votre expérience"
+        onBack={() => navigation.goBack()}
+      />
 
       {/* Menu */}
       <View style={S.menuCard}>
@@ -120,7 +117,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({navigation}) => {
 const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Neutral[50],
+    backgroundColor: theme.background,
   },
   header: {
     backgroundColor: theme.primary,

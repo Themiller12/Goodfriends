@@ -1,5 +1,6 @@
 <?php
 require_once 'config.php';
+require_once 'family_links.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -540,24 +541,16 @@ if ($method === 'PUT') {
         }
         
         // Mettre à jour les relations
-        // Fonction pour obtenir le type de relation inverse
-        function getInverseRelationType($type) {
-            switch ($type) {
-                case 'spouse':
-                    return 'spouse';
-                case 'parent':
-                    return 'child';
-                case 'child':
-                    return 'parent';
-                case 'sibling':
-                    return 'sibling';
-                case 'friend':
-                    return 'friend';
-                case 'colleague':
-                    return 'colleague';
-                default:
-                    return 'other';
-            }
+        // Seuls les contacts de l'utilisateur peuvent être reliés
+        if (isset($data['relationships']) && is_array($data['relationships'])) {
+            $ownedStmt = $db->prepare("SELECT id FROM contacts WHERE user_id = :user_id");
+            $ownedStmt->bindParam(':user_id', $userId);
+            $ownedStmt->execute();
+            $ownedIds = array_flip($ownedStmt->fetchAll(PDO::FETCH_COLUMN));
+            $data['relationships'] = array_values(array_filter($data['relationships'], function($rel) use ($ownedIds, $contactId) {
+                return is_array($rel) && isset($rel['contactId'], $rel['relationType'])
+                    && $rel['contactId'] !== $contactId && isset($ownedIds[$rel['contactId']]);
+            }));
         }
         
         // Récupérer les anciennes relations pour savoir lesquelles supprimer
@@ -661,6 +654,7 @@ if ($method === 'PUT') {
             }
         }
         
+        recomputeFamilyLinks($db, $userId);
         sendResponse(true, 'Contact mis à jour avec succès');
     } else {
         sendResponse(false, 'Erreur lors de la mise à jour', null, 500);
@@ -728,13 +722,14 @@ if ($method === 'DELETE') {
         }
         
         $db->commit();
+        recomputeFamilyLinks($db, $userId);
         sendResponse(true, 'Contact supprimé avec succès');
         exit;
         
     } catch (Exception $e) {
         $db->rollBack();
         error_log("Erreur suppression contact: " . $e->getMessage() . " | Trace: " . $e->getTraceAsString());
-        sendResponse(false, 'Erreur lors de la suppression: ' . $e->getMessage(), null, 500);
+        sendResponse(false, 'Erreur lors de la suppression', null, 500);
         exit;
     }
 }

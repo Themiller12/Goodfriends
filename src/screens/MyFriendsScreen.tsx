@@ -8,10 +8,10 @@ import {
   Image,
   Alert,
   RefreshControl,
-  ScrollView,
 } from 'react-native';
-import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import ScreenHeader from '../components/ScreenHeader';
 import {Neutral, Spacing, Radius, Shadow, Typography, Semantic} from '../theme/designSystem';
 import FriendRequestService, {FriendRequest, GoodFriendsUser} from '../services/FriendRequestService';
 import StorageService from '../services/StorageService';
@@ -229,25 +229,17 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
           )}
         </View>
       </View>
-      <Text style={styles(theme).chevron}>›</Text>
+      <MaterialIcons name="chevron-right" size={22} color={Neutral[300]} />
     </TouchableOpacity>
   );
 
   return (
     <View style={styles(theme).container}>
-      <View style={styles(theme).header}>
-        <View style={styles(theme).headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-            <View style={styles(theme).backBtnCircle}>
-              <MaterialIcons name="arrow-back" size={22} color="#383830" />
-            </View>
-          </TouchableOpacity>
-          <View>
-            <Text style={styles(theme).headerTitle}>Mes amis GoodFriends</Text>
-            <Text style={styles(theme).headerSubtitle}>Gérez vos connexions et demandes d’amis</Text>
-          </View>
-        </View>
-      </View>
+      <ScreenHeader
+        title="Mes amis GoodFriends"
+        subtitle="Gérez vos connexions et demandes d’amis"
+        onBack={() => navigation.goBack()}
+      />
 
       <View style={styles(theme).tabContainer}>
         <TouchableOpacity
@@ -305,7 +297,7 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
           }
           ListEmptyComponent={
             <View style={styles(theme).emptyContainer}>
-              <Text style={styles(theme).emptyIcon}>📨</Text>
+              <MaterialIcons name="mail-outline" size={48} color={Neutral[300]} />
               <Text style={styles(theme).emptyText}>Aucune demande reçue</Text>
             </View>
           }
@@ -323,7 +315,7 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
           }
           ListEmptyComponent={
             <View style={styles(theme).emptyContainer}>
-              <Text style={styles(theme).emptyIcon}>📤</Text>
+              <MaterialIcons name="send" size={48} color={Neutral[300]} />
               <Text style={styles(theme).emptyText}>Aucune demande envoyée</Text>
             </View>
           }
@@ -341,7 +333,7 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
           }
           ListEmptyComponent={
             <View style={styles(theme).emptyContainer}>
-              <Text style={styles(theme).emptyIcon}>👥</Text>
+              <MaterialIcons name="group" size={48} color={Neutral[300]} />
               <Text style={styles(theme).emptyText}>Aucun ami</Text>
               <Text style={styles(theme).emptySubtext}>
                 Recherchez des utilisateurs et envoyez des demandes d'amis
@@ -357,7 +349,7 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fcf9f0',
+    backgroundColor: theme.background,
   },
   header: {
     backgroundColor: '#fcf9f0',

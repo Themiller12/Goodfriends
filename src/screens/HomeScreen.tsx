@@ -1,10 +1,11 @@
-import React, {useState, useEffect, useMemo, useRef} from 'react';
+import React, {useState, useEffect, useMemo} from 'react';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
+  StatusBar,
   TextInput,
   FlatList,
   Dimensions,
@@ -23,11 +24,10 @@ import {
   cancelAnimation,
   runOnJS,
 } from 'react-native-reanimated';
-import {Platform} from 'react-native';
 import {Contact, GraphNode, GraphLink, ContactGroup, RelationType} from '../types';
 import {Neutral, Radius, Shadow, Spacing, Typography} from '../theme/designSystem';
+import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import StorageService from '../services/StorageService';
-import ContactService from '../services/ContactService';
 import CacheService from '../services/CacheService';
 import MessageService from '../services/MessageService';
 import FriendRequestService from '../services/FriendRequestService';
@@ -43,7 +43,8 @@ const {width, height} = Dimensions.get('window');
 
 const HomeScreen: React.FC<HomeScreenProps> = ({navigation}) => {
   const {theme} = useTheme();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => createStyles(theme, insets.top), [theme, insets.top]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [groups, setGroups] = useState<ContactGroup[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -213,109 +214,6 @@ const HomeScreen: React.FC<HomeScreenProps> = ({navigation}) => {
       return months <= 0 ? null : `${months} mois`;
     }
     return `${years} ans`;
-  };
-
-  const buildSummary = (contact: Contact): string => {
-    try {
-      // Résumé = détails uniquement (le nom est géré par le titre / l'en-tête photo)
-      let summary = '';
-
-      // Âge : champ direct ou calculé depuis la date de naissance
-      const age = contact.age || (contact.dateOfBirth ? (() => {
-        const today = new Date();
-        const dob = new Date(contact.dateOfBirth as unknown as string);
-        let y = today.getFullYear() - dob.getFullYear();
-        const m = today.getMonth() - dob.getMonth();
-        if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) y--;
-        return y >= 0 ? y : null;
-      })() : null);
-
-      if (age) {
-        summary += `A ${age} ans`;
-      }
-
-      const children = Array.isArray(contact.children) ? contact.children : [];
-      if (children.length > 0) {
-        const childLabel = `${children.length} enfant${children.length > 1 ? 's' : ''}`;
-        summary += summary ? `, ${childLabel}` : childLabel.charAt(0).toUpperCase() + childLabel.slice(1);
-        const childNames = children.map(c => {
-          const a = calcChildAge(c.dateOfBirth ? new Date(c.dateOfBirth) : undefined);
-          return a ? `${c.firstName} (${a})` : c.firstName;
-        }).join(', ');
-        summary += ` : ${childNames}`;
-      }
-
-      const relationships = Array.isArray(contact.relationships) ? contact.relationships : [];
-
-      const childContacts = relationships
-        .filter(r => r.relationType === RelationType.CHILD)
-        .map(r => contacts.find(c => String(c.id) === String(r.contactId)))
-        .filter((c): c is Contact => c !== undefined);
-
-      if (childContacts.length > 0) {
-        if (children.length === 0) {
-          const cl = `${childContacts.length} enfant${childContacts.length > 1 ? 's' : ''}`;
-          summary += summary ? `, ${cl}` : cl.charAt(0).toUpperCase() + cl.slice(1);
-        } else {
-          summary += ` (et ${childContacts.length} autre${childContacts.length > 1 ? 's' : ''})`;
-        }
-        summary += ` : ${childContacts.map(c => {
-          const a = c.age ? `${c.age} ans` : calcChildAge(c.dateOfBirth ? new Date(c.dateOfBirth as unknown as string) : undefined);
-          return a ? `${c.firstName} (${a})` : c.firstName;
-        }).join(', ')}`;
-      }
-
-      const spouseRel = relationships.find(r => r.relationType === RelationType.SPOUSE);
-      if (spouseRel) {
-        const spouse = contacts.find(c => String(c.id) === String(spouseRel.contactId));
-        if (spouse) {
-          const spouseText = `Conjoint\u00b7e : ${spouse.firstName}`;
-          summary += summary ? `\n${spouseText}` : spouseText;
-        }
-      }
-
-      if (contact.allergies) {
-        summary += summary ? `\n\nAllergies : ${contact.allergies}` : `Allergies : ${contact.allergies}`;
-      }
-
-      const travels = Array.isArray(contact.travels) ? contact.travels : [];
-      if (travels.length > 0) {
-        summary += summary ? `\n\nVoyages : ${travels.join(', ')}` : `Voyages : ${travels.join(', ')}`;
-      }
-
-      // Profession / études
-      const profs = Array.isArray((contact as any).professionsStudies) ? (contact as any).professionsStudies : [];
-      if (profs.length > 0) {
-        const profTitles = profs.map((p: any) => p.year ? `${p.title} (${p.year})` : p.title).join(', ');
-        summary += summary ? `\n${profTitles}` : profTitles;
-      }
-
-      if (contact.notes) {
-        summary += summary ? `\n\nNote :\n${contact.notes}` : `Note :\n${contact.notes}`;
-      }
-
-      if (__DEV__) {
-        console.log('[HomeScreen][buildSummary] result', {
-          contactId: contact.id,
-          hasPhoto: !!contact.photo,
-          firstName: contact.firstName,
-          lastName: contact.lastName,
-          summaryLength: summary.length,
-          summaryPreview: summary.slice(0, 120),
-        });
-      }
-
-      return summary || 'Aucune information complémentaire.';
-    } catch (_e) {
-      if (__DEV__) {
-        console.log('[HomeScreen][buildSummary] error fallback', {
-          contactId: contact.id,
-          firstName: contact.firstName,
-          lastName: contact.lastName,
-        });
-      }
-      return 'Aucune information complémentaire.';
-    }
   };
 
   const handleContactPress = async (contact: Contact) => {
@@ -629,6 +527,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({navigation}) => {
 
   return (
     <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>Mon Répertoire</Text>
@@ -732,25 +631,25 @@ const HomeScreen: React.FC<HomeScreenProps> = ({navigation}) => {
       <TouchableOpacity
         style={styles.fab}
         onPress={() => navigation.navigate('AddContact')}>
-        <Text style={styles.fabText}>+</Text>
+        <MaterialIcons name="add" size={28} color="#FFF" />
       </TouchableOpacity>
     </View>
   );
 };
 
-const createStyles = (themeColors: any) => StyleSheet.create({
+const createStyles = (themeColors: any, topInset: number) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fcf9f0',
+    backgroundColor: themeColors.background,
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: Spacing.xl,
-    paddingTop: Platform.OS === 'android' ? 48 : 56,
+    paddingTop: topInset + Spacing.md,
     paddingBottom: Spacing.base,
-    backgroundColor: '#fcf9f0',
+    backgroundColor: themeColors.background,
   },
   headerTitle: {
     ...Typography.title,

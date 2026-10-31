@@ -106,6 +106,8 @@ const relLabel: Record<string, string> = {
   cousin: 'Cousin·e',
   stepmother: 'Belle-mère',
   stepfather: 'Beau-père',
+  grandparent: 'Grand-parent',
+  grandchild: 'Petit-enfant',
   friend: 'Ami·e',
   colleague: 'Collègue',
   other: 'Autre',

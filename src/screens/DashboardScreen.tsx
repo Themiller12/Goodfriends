@@ -12,7 +12,6 @@ import {
   TouchableOpacity,
   Image,
   FlatList,
-  Platform,
   BackHandler,
   Alert,
   StatusBar,
@@ -28,24 +27,13 @@ import AuthService from '../services/AuthService';
 import {getLastCallDate, invalidateCallCache} from '../services/PhoneActivityService';
 import {useTheme} from '../context/ThemeContext';
 import {Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
+import {getDaysUntilBirthday} from '../utils/birthday';
+import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {Linking} from 'react-native';
 
 // ─── Durée avant laquelle un contact est considéré "à recontacter" ──────────
 const REMINDER_THRESHOLD_DAYS = 14;
-// Nombre de jours avant anniversaire à afficher dans la section
-const BIRTHDAY_LOOKAHEAD_DAYS = 60;
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-const getDaysUntilBirthday = (dateOfBirth: any): number | null => {
-  if (!dateOfBirth) return null;
-  const today = new Date();
-  const birth = new Date(dateOfBirth);
-  if (isNaN(birth.getTime())) return null;
-  const next = new Date(today.getFullYear(), birth.getMonth(), birth.getDate());
-  if (next < today) next.setFullYear(today.getFullYear() + 1);
-  return Math.ceil((next.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-};
-
 const getNextBirthdayAge = (dateOfBirth: any): number | null => {
   if (!dateOfBirth) return null;
   const birth = new Date(dateOfBirth);
@@ -137,7 +125,8 @@ interface DashboardScreenProps {
 
 const DashboardScreen: React.FC<DashboardScreenProps> = ({navigation}) => {
   const {theme} = useTheme();
-  const s = useMemo(() => createStyles(theme), [theme]);
+  const insets = useSafeAreaInsets();
+  const s = useMemo(() => createStyles(theme, insets.top), [theme, insets.top]);
 
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [userName, setUserName] = useState('');
@@ -251,7 +240,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({navigation}) => {
     contacts.forEach(c => {
       // Contact lui-même
       const days = getDaysUntilBirthday(c.dateOfBirth);
-      if (days !== null && days <= BIRTHDAY_LOOKAHEAD_DAYS) {
+      if (days !== null) {
         entries.push({
           id: c.id,
           firstName: c.firstName,
@@ -268,7 +257,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({navigation}) => {
       (c.children || []).forEach((child: Child) => {
         if (!child.dateOfBirth) return;
         const childDays = getDaysUntilBirthday(child.dateOfBirth);
-        if (childDays !== null && childDays <= BIRTHDAY_LOOKAHEAD_DAYS) {
+        if (childDays !== null) {
           entries.push({
             id: `${c.id}-${child.id}`,
             firstName: child.firstName,
@@ -282,7 +271,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({navigation}) => {
       });
     });
 
-    return entries.sort((a, b) => a.daysUntil - b.daysUntil).slice(0, 10);
+    return entries.sort((a, b) => a.daysUntil - b.daysUntil).slice(0, 3);
   }, [contacts]);
 
   const reminders = useMemo(() => {
@@ -479,9 +468,6 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({navigation}) => {
           <View style={s.section}>
             <View style={s.sectionHeader}>
               <Text style={s.sectionTitle}>Prochains anniversaires</Text>
-              <TouchableOpacity onPress={() => navigation.navigate('Birthdays')}>
-                <Text style={[s.sectionLink, {color: theme.primary}]}>Voir tout</Text>
-              </TouchableOpacity>
             </View>
             <FlatList
               data={upcomingBirthdays}
@@ -490,9 +476,14 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({navigation}) => {
               keyExtractor={item => item.id}
               renderItem={renderBirthdayCard}
               contentContainerStyle={s.birthdayList}
-              snapToInterval={100}
-              decelerationRate="fast"
             />
+            <TouchableOpacity
+              style={[s.allBirthdaysBtn, {borderColor: theme.primary}]}
+              onPress={() => navigation.navigate('Birthdays')}
+              activeOpacity={0.8}>
+              <MaterialIcons name="cake" size={18} color={theme.primary} />
+              <Text style={[s.allBirthdaysText, {color: theme.primary}]}>Tous les anniversaires</Text>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -540,17 +531,17 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({navigation}) => {
 };
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
-const createStyles = (theme: any) =>
+const createStyles = (theme: any, topInset: number) =>
   StyleSheet.create({
     root: {
       flex: 1,
-      backgroundColor: '#fcf9f0',
+      backgroundColor: theme.background,
     },
     scroll: {
       flex: 1,
     },
     scrollContent: {
-      paddingTop: Platform.OS === 'android' ? 48 : 56,
+      paddingTop: topInset + Spacing.md,
     },
 
     // Header
@@ -659,6 +650,22 @@ const createStyles = (theme: any) =>
       backgroundColor: theme.primary + '12',
       borderWidth: 1.5,
       borderColor: theme.primary + '40',
+    },
+    allBirthdaysBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      alignSelf: 'center',
+      marginTop: Spacing.sm,
+      paddingVertical: 10,
+      paddingHorizontal: 18,
+      borderWidth: 1.5,
+      borderRadius: Radius.xl,
+    },
+    allBirthdaysText: {
+      fontSize: 14,
+      fontWeight: '700',
+      marginLeft: 6,
     },
     birthdayAvatarWrapper: {
       position: 'relative',

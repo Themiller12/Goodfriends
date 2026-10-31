@@ -9,6 +9,8 @@ export enum RelationType {
   COUSIN = 'cousin',
   STEPMOTHER = 'stepmother',
   STEPFATHER = 'stepfather',
+  GRANDPARENT = 'grandparent', // déduit automatiquement (parent d'un parent)
+  GRANDCHILD = 'grandchild',   // déduit automatiquement (enfant d'un enfant)
   FRIEND = 'friend',
   COLLEAGUE = 'colleague',
   OTHER = 'other',

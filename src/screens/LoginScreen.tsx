@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import AuthService from '../services/AuthService';
+import {commitCredentials} from '../services/AutofillService';
 import {useTheme} from '../context/ThemeContext';
 import {Neutral, Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
 
@@ -38,6 +39,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({navigation}) => {
     setLoading(true);
     try {
       await AuthService.login(email, password);
+      commitCredentials();
       navigation.reset({
         index: 0,
         routes: [{name: 'Home'}],
@@ -50,29 +52,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({navigation}) => {
           [
             {
               text: 'Vérifier maintenant',
-              onPress: async () => {
-                try {
-                  const account = await AuthService.getCurrentUser();
-                  if (account) {
-                    navigation.navigate('Verification', {
-                      verificationCode: account.verificationCode,
-                      email: account.email,
-                    });
-                  }
-                } catch (err) {
-                  Alert.alert('Erreur', 'Impossible de récupérer les informations du compte');
-                }
-              },
+              onPress: () =>
+                navigation.navigate('Verification', {email}),
             },
             {text: 'Annuler', style: 'cancel'},
           ]
         );
       } else if (error.name === 'NetworkError') {
-        Alert.alert(
-          'Erreur réseau',
-          error.message + '\n\nURL API : ' + 'http://volt-services.fr/DEV/goodfriends/api',
-          [{text: 'OK'}]
-        );
+        Alert.alert('Erreur réseau', error.message, [{text: 'OK'}]);
       } else {
         Alert.alert('Erreur de connexion', error.message || 'Une erreur est survenue');
       }
@@ -116,6 +103,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({navigation}) => {
               keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
+              autoComplete="username"
+              textContentType="username"
+              importantForAutofill="yes"
             />
           </View>
 
@@ -130,6 +120,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({navigation}) => {
               onChangeText={setPassword}
               secureTextEntry={!showPassword}
               autoCapitalize="none"
+              autoComplete="current-password"
+              textContentType="password"
+              importantForAutofill="yes"
             />
             <TouchableOpacity onPress={() => setShowPassword(v => !v)} style={S.eyeBtn}>
               <MaterialIcons
@@ -139,6 +132,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({navigation}) => {
               />
             </TouchableOpacity>
           </View>
+
+          <TouchableOpacity
+            style={S.forgotBtn}
+            onPress={() => navigation.navigate('ForgotPassword', {email})}>
+            <Text style={S.linkTextBold}>Mot de passe oublié ?</Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
             style={[S.btn, loading && S.btnDisabled]}
@@ -248,6 +247,10 @@ const createStyles = (theme: any) => StyleSheet.create({
     ...Typography.titleSm,
     color: '#FFF',
     letterSpacing: 0.3,
+  },
+  forgotBtn: {
+    alignSelf: 'flex-end',
+    marginBottom: Spacing.sm,
   },
   btnDisabled: {
     backgroundColor: Neutral[300],

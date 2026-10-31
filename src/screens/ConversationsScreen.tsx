@@ -7,7 +7,8 @@ import {
   RefreshControl,
   Alert,
   TouchableOpacity,
-  Modal,
+  Image,
+  StatusBar,
   TextInput,
   ActivityIndicator,
   ScrollView,
@@ -15,10 +16,12 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import Modal from '../components/AppModal';
+import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme } from '../context/ThemeContext';
-import { Neutral, Spacing, Radius, Shadow, Typography } from '../theme/designSystem';
+import { Neutral, Spacing, Radius, Shadow } from '../theme/designSystem';
 import MessageService, { Conversation } from '../services/MessageService';
 import StorageService from '../services/StorageService';
 import FriendRequestService from '../services/FriendRequestService';
@@ -38,7 +41,8 @@ type UnifiedItem =
 const ConversationsScreen: React.FC = () => {
   const { theme } = useTheme();
   const navigation = useNavigation<NavigationProp>();
-  const S = styles(theme);
+  const insets = useSafeAreaInsets();
+  const S = styles(theme, insets.top);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [groupChats, setGroupChats] = useState<GroupChat[]>([]);
@@ -53,6 +57,7 @@ const ConversationsScreen: React.FC = () => {
   // New conversation modal
   const [modalVisible, setModalVisible] = useState(false);
   const [goodFriendsContacts, setGoodFriendsContacts] = useState<Contact[]>([]);
+  const [localContacts, setLocalContacts] = useState<Contact[]>([]);
   const [loadingContacts, setLoadingContacts] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [groupStep, setGroupStep] = useState<'select' | 'name'>('select');
@@ -64,10 +69,12 @@ const ConversationsScreen: React.FC = () => {
   // Pré-peupler depuis le cache AsyncStorage sans spinner
   const loadFromCache = useCallback(async () => {
     try {
-      const [cachedConvs, rawGroups] = await Promise.all([
+      const [cachedConvs, rawGroups, cachedContacts] = await Promise.all([
         CacheService.getCachedConversations(),
         AsyncStorage.getItem('@group_chats_cache'),
+        CacheService.getCachedContacts(),
       ]);
+      if (cachedContacts) setLocalContacts(cachedContacts);
       const convs: Conversation[] = cachedConvs ?? [];
       const groups: GroupChat[] = rawGroups ? JSON.parse(rawGroups) : [];
       if (convs.length > 0 || groups.length > 0) {
@@ -130,6 +137,7 @@ const ConversationsScreen: React.FC = () => {
 
       setConversations(convs);
       setGroupChats(groups);
+      StorageService.getContacts().then(setLocalContacts).catch(() => {});
 
       const merged = buildUnified(convs, groups);
       setUnified(merged);
@@ -283,7 +291,7 @@ const ConversationsScreen: React.FC = () => {
     if (item.kind === 'dm') {
       const c = item.conv;
       // Fallback sur le nom enregistré dans le contact local si le profil Goodfriends est vide
-      const localContact = goodFriendsContacts.find(x => x.goodfriendsUserId === c.otherUserId);
+      const localContact = localContacts.find(x => x.goodfriendsUserId === c.otherUserId);
       const resolvedFirstName = c.otherUserFirstName || localContact?.firstName;
       const resolvedLastName  = c.otherUserLastName  || localContact?.lastName;
       const name = formatName(resolvedFirstName, resolvedLastName, c.otherUserEmail);
@@ -299,7 +307,11 @@ const ConversationsScreen: React.FC = () => {
           })}
           activeOpacity={0.7}>
           <View style={S.avatarCircle}>
-            <Text style={S.avatarText}>{initials}</Text>
+            {localContact?.photo ? (
+              <Image source={{ uri: localContact.photo }} style={S.avatarImage} />
+            ) : (
+              <Text style={S.avatarText}>{initials}</Text>
+            )}
             <OnlineIndicator isOnline={onlineStatuses[c.otherUserId] ?? false} size={13} />
           </View>
           <View style={S.itemInfo}>
@@ -351,6 +363,7 @@ const ConversationsScreen: React.FC = () => {
   if (loading) {
     return (
       <View style={S.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
         <View style={S.header}>
           <Text style={S.headerTitle}>Messages</Text>
         </View>
@@ -363,6 +376,7 @@ const ConversationsScreen: React.FC = () => {
 
   return (
     <View style={S.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
       {/* Header */}
       <View style={S.header}>
         <View style={S.headerContent}>
@@ -523,19 +537,19 @@ const ConversationsScreen: React.FC = () => {
   );
 };
 
-const styles = (theme: any) => StyleSheet.create({
+const styles = (theme: any, topInset: number) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fcf9f0',
+    backgroundColor: theme.background,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.xl,
-    paddingTop: Platform.OS === 'android' ? 48 : 56,
+    paddingTop: topInset + Spacing.md,
     paddingBottom: Spacing.base,
-    backgroundColor: '#fcf9f0',
+    backgroundColor: theme.background,
   },
   headerContent: { flex: 1 },
   headerTitle: {
@@ -607,6 +621,11 @@ const styles = (theme: any) => StyleSheet.create({
     color: '#FFF',
     fontWeight: '700',
     fontSize: 17,
+  },
+  avatarImage: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
   },
   itemInfo: { flex: 1, minWidth: 0 },
   itemTop: {

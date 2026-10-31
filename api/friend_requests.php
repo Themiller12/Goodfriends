@@ -13,11 +13,12 @@ $userId = verifyToken();
 // SEARCH USERS - Rechercher des utilisateurs par email ou téléphone
 if ($method === 'GET' && isset($_GET['action']) && $_GET['action'] === 'search') {
     
-    if (!isset($_GET['query']) || empty($_GET['query'])) {
-        sendResponse(false, 'Terme de recherche requis', null, 400);
+    if (!isset($_GET['query']) || !is_string($_GET['query']) || mb_strlen(trim($_GET['query'])) < 3) {
+        sendResponse(false, 'Saisissez au moins 3 caractères', null, 400);
     }
     
-    $searchQuery = '%' . $_GET['query'] . '%';
+    // Échapper les jokers LIKE pour empêcher d'énumérer l'annuaire avec % ou _
+    $searchQuery = '%' . addcslashes(trim($_GET['query']), '\\%_') . '%';
     
     // On filtre les utilisateurs selon leurs paramètres de confidentialité :
     // - si allow_search_email=0, l'utilisateur n'apparaît pas lors d'une recherche par email
@@ -413,7 +414,8 @@ if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'accept'
         
     } catch (Exception $e) {
         $db->rollBack();
-        sendResponse(false, 'Erreur lors de l\'acceptation: ' . $e->getMessage(), null, 500);
+        error_log('Erreur acceptation demande ami: ' . $e->getMessage());
+        sendResponse(false, 'Erreur lors de l\'acceptation', null, 500);
     }
 }
 

@@ -8,21 +8,22 @@ import {
   ScrollView,
   Alert,
   Platform,
-  Modal,
   FlatList,
   Image,
-  StatusBar,
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import Modal from '../components/AppModal';
 import Contacts from 'react-native-contacts';
 import {launchImageLibrary} from 'react-native-image-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import {useTheme} from '../context/ThemeContext';
+import ScreenHeader from '../components/ScreenHeader';
 import {Neutral, Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
 import ContactService from '../services/ContactService';
 import StorageService from '../services/StorageService';
 import NotificationService from '../services/NotificationService';
-import {ContactGroup, GroupType, Contact, Child, RelationType} from '../types';
+import RelationsEditor, {RelationsValue} from '../components/RelationsEditor';
+import {ContactGroup, GroupType, Contact} from '../types';
 
 interface AddContactScreenProps {
   navigation: any;
@@ -51,27 +52,13 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
   const [showGroupPickerModal, setShowGroupPickerModal] = useState(false);
   const [showGroupTypePickerModal, setShowGroupTypePickerModal] = useState(false);
   
-  // Enfants
-  const [children, setChildren] = useState<Child[]>([]);
-  const [showChildModal, setShowChildModal] = useState(false);
-  const [childFirstName, setChildFirstName] = useState('');
-  const [childDateOfBirth, setChildDateOfBirth] = useState<Date | undefined>(undefined);
-  const [showChildDatePicker, setShowChildDatePicker] = useState(false);
-  const [childNotes, setChildNotes] = useState('');
-  const [childGender, setChildGender] = useState<'male' | 'female' | 'other'>('male');
-  const [childGifts, setChildGifts] = useState<string[]>([]);
-  const [newGiftText, setNewGiftText] = useState('');
-  
-  // Relations
+  // Enfants, famille et relations
   const [allContacts, setAllContacts] = useState<Contact[]>([]);
-  const [relationships, setRelationships] = useState<Array<{contactId: string; relationType: RelationType; notes?: string}>>([]);
-  const [showRelationModal, setShowRelationModal] = useState(false);
-  const [selectedContactId, setSelectedContactId] = useState('');
-  const [relationType, setRelationType] = useState<RelationType>(RelationType.FRIEND);
-  const [relationNotes, setRelationNotes] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filteredContacts, setFilteredContacts] = useState<Contact[]>([]);
-  const [showRelationTypePickerModal, setShowRelationTypePickerModal] = useState(false);
+  const [relations, setRelations] = useState<RelationsValue>({
+    children: [],
+    familyMembers: [],
+    relationships: [],
+  });
   
   // Import contact
   const [showContactPickerModal, setShowContactPickerModal] = useState(false);
@@ -85,19 +72,6 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
     loadAllContacts();
   }, []);
 
-  useEffect(() => {
-    if (searchQuery) {
-      const filtered = allContacts.filter(
-        c =>
-          c.firstName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          c.lastName.toLowerCase().includes(searchQuery.toLowerCase()),
-      );
-      setFilteredContacts(filtered);
-    } else {
-      setFilteredContacts(allContacts);
-    }
-  }, [searchQuery, allContacts]);
-
   const loadGroups = async () => {
     const loadedGroups = await StorageService.getGroups();
     setGroups(loadedGroups);
@@ -106,7 +80,6 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
   const loadAllContacts = async () => {
     const contacts = await StorageService.getContacts();
     setAllContacts(contacts);
-    setFilteredContacts(contacts);
   };
 
   const handleQuickCreateGroup = async () => {
@@ -134,67 +107,6 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
     }
   };
 
-  const handleAddChild = () => {
-    if (!childFirstName) {
-      Alert.alert('Erreur', 'Le prénom de l\'enfant est obligatoire');
-      return;
-    }
-
-    const newChild: Child = {
-      id: `temp-${Date.now()}`,
-      firstName: childFirstName,
-      dateOfBirth: childDateOfBirth,
-      gender: childGender,
-      notes: childNotes,
-      gifts: childGifts.length > 0 ? [...childGifts] : undefined,
-    };
-
-    setChildren([...children, newChild]);
-    setShowChildModal(false);
-    setChildFirstName('');
-    setChildDateOfBirth(undefined);
-    setChildNotes('');
-    setChildGender('male');
-    setChildGifts([]);
-    setNewGiftText('');
-  };
-
-  const handleDeleteChild = (childId: string) => {
-    setChildren(children.filter(c => c.id !== childId));
-  };
-
-  const handleAddRelation = () => {
-    if (!selectedContactId) {
-      Alert.alert('Erreur', 'Veuillez sélectionner un contact');
-      return;
-    }
-
-    const existingRelation = relationships.find(r => r.contactId === selectedContactId);
-    if (existingRelation) {
-      Alert.alert('Erreur', 'Une relation existe déjà avec ce contact');
-      return;
-    }
-
-    setRelationships([
-      ...relationships,
-      {
-        contactId: selectedContactId,
-        relationType,
-        notes: relationNotes,
-      },
-    ]);
-
-    setShowRelationModal(false);
-    setSelectedContactId('');
-    setRelationType(RelationType.FRIEND);
-    setRelationNotes('');
-    setSearchQuery('');
-  };
-
-  const handleDeleteRelation = (contactId: string) => {
-    setRelationships(relationships.filter(r => r.contactId !== contactId));
-  };
-
   const handleSave = async () => {
     if (!firstName || !lastName) {
       Alert.alert('Erreur', 'Le prénom et le nom sont obligatoires');
@@ -215,23 +127,19 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
         groupIds: selectedGroupId ? [selectedGroupId] : [],
       });
 
-      // Ajouter les enfants
-      for (const child of children) {
-        await ContactService.addChild(contact.id, {
-          firstName: child.firstName,
-          dateOfBirth: child.dateOfBirth,
-          notes: child.notes,
+      // La création (POST) ignore enfants, famille et relations : on les enregistre via la mise à jour
+      const hasRelations =
+        relations.children.length > 0 ||
+        relations.familyMembers.length > 0 ||
+        relations.relationships.length > 0;
+      if (hasRelations) {
+        await StorageService.updateContact({
+          ...contact,
+          children: relations.children,
+          familyMembers: relations.familyMembers,
+          relationships: relations.relationships,
+          updatedAt: new Date(),
         });
-      }
-
-      // Ajouter les relations
-      for (const relation of relationships) {
-        await ContactService.addRelationship(
-          contact.id,
-          relation.contactId,
-          relation.relationType,
-          relation.notes,
-        );
       }
 
       Alert.alert('Succès', 'Contact créé avec succès', [
@@ -278,13 +186,6 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
     setShowDatePicker(Platform.OS === 'ios');
     if (selectedDate) {
       setDateOfBirth(selectedDate);
-    }
-  };
-
-  const onChildDateChange = (event: any, selectedDate?: Date) => {
-    setShowChildDatePicker(Platform.OS === 'ios');
-    if (selectedDate) {
-      setChildDateOfBirth(selectedDate);
     }
   };
 
@@ -338,25 +239,6 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
     Alert.alert('Succès', 'Contact importé, vous pouvez modifier les informations avant de l\'enregistrer');
   };
 
-  const getRelationLabel = (relationType: RelationType): string => {
-    switch (relationType) {
-      case RelationType.SPOUSE:
-        return 'Conjoint(e)';
-      case RelationType.CHILD:
-        return 'Enfant';
-      case RelationType.PARENT:
-        return 'Parent';
-      case RelationType.SIBLING:
-        return 'Frère/Sœur';
-      case RelationType.FRIEND:
-        return 'Ami(e)';
-      case RelationType.COLLEAGUE:
-        return 'Collègue';
-      default:
-        return 'Autre';
-    }
-  };
-
   const filteredPhoneContacts = phoneContacts.filter(contact => {
     const searchLower = contactSearchQuery.toLowerCase();
     const fullName = `${contact.givenName || ''} ${contact.familyName || ''}`.toLowerCase();
@@ -365,16 +247,8 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
 
   return (
     <View style={S.root}>
-      <StatusBar barStyle="light-content" backgroundColor={theme.primary} />
       {/* ── Header ── */}
-      <View style={S.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={S.backButton}>
-          <MaterialIcons name="arrow-back" size={22} color="#FFF" />
-        </TouchableOpacity>
-        <View style={S.headerContent}>
-          <Text style={S.title}>Nouveau contact</Text>
-        </View>
-      </View>
+      <ScreenHeader title="Nouveau contact" onBack={() => navigation.goBack()} />
 
       <ScrollView style={S.scroll} contentContainerStyle={S.content} keyboardShouldPersistTaps="handled">
 
@@ -430,119 +304,17 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
             mode="date"
             display="default"
             onChange={onDateChange}
+            minimumDate={new Date(1900, 0, 1)}
             maximumDate={new Date()}
           />
         )}
 
-        {/* Section Enfants */}
-        <View style={S.section}>
-          <View style={S.sectionHeader}>
-            <Text style={S.sectionTitle}>Enfants</Text>
-            <TouchableOpacity
-              style={S.addButton}
-              onPress={() => setShowChildModal(true)}>
-              <Text style={S.addButtonText}>+ Ajouter</Text>
-            </TouchableOpacity>
-          </View>
-
-          {children.length === 0 ? (
-            <Text style={S.emptyText}>Aucun enfant ajouté</Text>
-          ) : (
-            <>
-              {children.map((child) => {
-                let ageText = null;
-                if (child.dateOfBirth) {
-                  const birthDate = new Date(child.dateOfBirth);
-                  const today = new Date();
-                  
-                  let years = today.getFullYear() - birthDate.getFullYear();
-                  let months = today.getMonth() - birthDate.getMonth();
-                  
-                  if (months < 0) {
-                    years--;
-                    months += 12;
-                  }
-                  
-                  if (years > 0) {
-                    ageText = `${years} an${years > 1 ? 's' : ''}`;
-                    if (months > 0) {
-                      ageText += ` et ${months} mois`;
-                    }
-                  } else if (months > 0) {
-                    ageText = `${months} mois`;
-                  } else {
-                    ageText = 'Nouveau-né';
-                  }
-                }
-                
-                return (
-                  <View key={child.id} style={S.item}>
-                    <View style={S.itemContent}>
-                      <Text style={S.itemName}>{child.firstName}</Text>
-                      {ageText && <Text style={S.itemDetail}>{ageText}</Text>}
-                      {child.dateOfBirth && (
-                        <Text style={S.itemDetail}>
-                          Né(e) le {new Date(child.dateOfBirth).toLocaleDateString('fr-FR')}
-                        </Text>
-                      )}
-                      {child.notes && (
-                        <Text style={S.itemNotes}>{child.notes}</Text>
-                      )}
-                    </View>
-                    <TouchableOpacity
-                      style={S.deleteButton}
-                      onPress={() => handleDeleteChild(child.id)}>
-                      <Text style={S.deleteButtonText}>✕</Text>
-                    </TouchableOpacity>
-                  </View>
-                );
-              })}
-            </>
-          )}
-        </View>
-
-        {/* Section Relations */}
-        <View style={S.section}>
-          <View style={S.sectionHeader}>
-            <Text style={S.sectionTitle}>Relations</Text>
-            <TouchableOpacity
-              style={S.addButton}
-              onPress={() => setShowRelationModal(true)}>
-              <Text style={S.addButtonText}>+ Ajouter</Text>
-            </TouchableOpacity>
-          </View>
-
-          {relationships.length === 0 ? (
-            <Text style={S.emptyText}>Aucune relation ajoutée</Text>
-          ) : (
-            <>
-              {relationships.map((relation) => {
-                const relatedContact = allContacts.find(c => c.id === relation.contactId);
-                if (!relatedContact) return null;
-                return (
-                  <View key={relation.contactId} style={S.item}>
-                    <View style={S.itemContent}>
-                      <Text style={S.itemType}>
-                        {getRelationLabel(relation.relationType)}
-                      </Text>
-                      <Text style={S.itemName}>
-                        {relatedContact.firstName} {relatedContact.lastName}
-                      </Text>
-                      {relation.notes && (
-                        <Text style={S.itemNotes}>{relation.notes}</Text>
-                      )}
-                    </View>
-                    <TouchableOpacity
-                      style={S.deleteButton}
-                      onPress={() => handleDeleteRelation(relation.contactId)}>
-                      <Text style={S.deleteButtonText}>✕</Text>
-                    </TouchableOpacity>
-                  </View>
-                );
-              })}
-            </>
-          )}
-        </View>
+        {/* Enfants, Famille, Relations */}
+        <RelationsEditor
+          value={relations}
+          onChange={setRelations}
+          allContacts={allContacts}
+        />
 
         {/* Profession */}
         <Text style={S.label}>Profession</Text>
@@ -640,210 +412,6 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
             </Text>
           </TouchableOpacity>
         </View>
-
-      {/* Modal Ajouter un enfant */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        statusBarTranslucent={true}
-        visible={showChildModal}
-        onRequestClose={() => setShowChildModal(false)}>
-        <View style={S.modalContainer}>
-          <ScrollView style={{width: '100%'}} contentContainerStyle={{flexGrow: 1, justifyContent: 'center', alignItems: 'center'}} keyboardShouldPersistTaps="handled">
-          <View style={S.modalContent}>
-            <Text style={S.modalTitle}>Ajouter un enfant</Text>
-
-            <Text style={S.modalLabel}>Prénom *</Text>
-            <TextInput
-              style={S.modalInput}
-              placeholder="Prénom de l'enfant"
-              value={childFirstName}
-              onChangeText={setChildFirstName}
-              autoCapitalize="words"
-            />
-
-            <Text style={S.modalLabel}>Date de naissance</Text>
-            <TouchableOpacity
-              style={S.dateButton}
-              onPress={() => setShowChildDatePicker(true)}>
-              <Text style={S.dateButtonText}>
-                {childDateOfBirth
-                  ? childDateOfBirth.toLocaleDateString('fr-FR')
-                  : 'Sélectionner une date'}
-              </Text>
-            </TouchableOpacity>
-
-            {showChildDatePicker && (
-              <DateTimePicker
-                value={childDateOfBirth || new Date()}
-                mode="date"
-                display="default"
-                onChange={onChildDateChange}
-                maximumDate={new Date()}
-              />
-            )}
-
-            <Text style={S.modalLabel}>Sexe</Text>
-            <View style={S.genderRow}>
-              {(['male', 'female', 'other'] as const).map(g => (
-                <TouchableOpacity
-                  key={g}
-                  style={[S.genderBtn, childGender === g && S.genderBtnActive]}
-                  onPress={() => setChildGender(g)}>
-                  <Text style={[S.genderBtnText, childGender === g && S.genderBtnTextActive]}>
-                    {g === 'male' ? 'Garçon' : g === 'female' ? 'Fille' : 'Autre'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={S.modalLabel}>Notes</Text>
-            <TextInput
-              style={[S.modalInput, S.textArea]}
-              placeholder="Notes..."
-              value={childNotes}
-              onChangeText={setChildNotes}
-              multiline
-              numberOfLines={3}
-              textAlignVertical="top"
-            />
-
-            <Text style={S.modalLabel}>Cadeaux offerts</Text>
-            {childGifts.map((gift, idx) => (
-              <View key={idx} style={S.giftRow}>
-                <Text style={S.giftText}>{gift}</Text>
-                <TouchableOpacity onPress={() => setChildGifts(childGifts.filter((_, i) => i !== idx))}>
-                  <MaterialIcons name="close" size={18} color="#e53935" />
-                </TouchableOpacity>
-              </View>
-            ))}
-            <View style={S.giftInputRow}>
-              <TextInput
-                style={[S.modalInput, {flex: 1, marginBottom: 0, marginRight: 8}]}
-                placeholder="Ex: Lego, livre..."
-                value={newGiftText}
-                onChangeText={setNewGiftText}
-              />
-              <TouchableOpacity
-                style={S.giftAddBtn}
-                onPress={() => {
-                  if (newGiftText.trim()) {
-                    setChildGifts([...childGifts, newGiftText.trim()]);
-                    setNewGiftText('');
-                  }
-                }}>
-                <MaterialIcons name="add" size={22} color="#fff" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={S.modalButtons}>
-              <TouchableOpacity
-                style={[S.button, S.cancelButton]}
-                onPress={() => {
-                  setShowChildModal(false);
-                  setChildFirstName('');
-                  setChildDateOfBirth(undefined);
-                  setChildNotes('');
-                  setChildGender('male');
-                  setChildGifts([]);
-                  setNewGiftText('');
-                }}>
-                <Text style={S.cancelButtonText}>Annuler</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[S.button, S.saveButton]}
-                onPress={handleAddChild}>
-                <Text style={S.saveButtonText}>Ajouter</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-          </ScrollView>
-        </View>
-      </Modal>
-
-      {/* Modal Ajouter une relation */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        statusBarTranslucent={true}
-        visible={showRelationModal}
-        onRequestClose={() => setShowRelationModal(false)}>
-        <View style={S.modalContainer}>
-          <View style={S.modalContent}>
-            <Text style={S.modalTitle}>Ajouter une relation</Text>
-
-            <Text style={S.modalLabel}>Rechercher un contact *</Text>
-            <TextInput
-              style={S.modalInput}
-              placeholder="Nom ou prénom..."
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-
-            <View style={S.contactList}>
-              <FlatList
-                data={filteredContacts}
-                keyExtractor={item => item.id}
-                renderItem={({item}) => (
-                  <TouchableOpacity
-                    style={[
-                      S.contactItem,
-                      selectedContactId === item.id && S.contactItemSelected,
-                    ]}
-                    onPress={() => setSelectedContactId(item.id)}>
-                    <Text style={S.contactItemText}>
-                      {item.firstName} {item.lastName}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-                ListEmptyComponent={
-                  <Text style={S.emptyText}>Aucun contact trouvé</Text>
-                }
-              />
-            </View>
-
-            <Text style={S.modalLabel}>Type de relation *</Text>
-            <TouchableOpacity
-              style={S.relationTypeSelector}
-              onPress={() => setShowRelationTypePickerModal(true)}>
-              <Text style={S.relationTypeSelectorText}>
-                {getRelationLabel(relationType)}
-              </Text>
-              <Text style={S.relationTypeSelectorIcon}>▼</Text>
-            </TouchableOpacity>
-
-            <Text style={S.modalLabel}>Notes</Text>
-            <TextInput
-              style={[S.modalInput, S.textArea]}
-              placeholder="Notes..."
-              value={relationNotes}
-              onChangeText={setRelationNotes}
-              multiline
-              numberOfLines={3}
-              textAlignVertical="top"
-            />
-
-            <View style={S.modalButtons}>
-              <TouchableOpacity
-                style={[S.button, S.cancelButton]}
-                onPress={() => {
-                  setShowRelationModal(false);
-                  setSelectedContactId('');
-                  setRelationType(RelationType.FRIEND);
-                  setRelationNotes('');
-                  setSearchQuery('');
-                }}>
-                <Text style={S.cancelButtonText}>Annuler</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[S.button, S.saveButton]}
-                onPress={handleAddRelation}>
-                <Text style={S.saveButtonText}>Ajouter</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       {/* Modal Nouveau groupe */}
       <Modal
@@ -1038,51 +606,6 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
           </View>
         </View>
       </Modal>
-
-      {/* Modal Sélectionner Type de Relation */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        statusBarTranslucent={true}
-        visible={showRelationTypePickerModal}
-        onRequestClose={() => setShowRelationTypePickerModal(false)}>
-        <View style={S.modalContainer}>
-          <View style={S.modalContent}>
-            <Text style={S.modalTitle}>Type de relation</Text>
-
-            {[
-              {type: RelationType.SPOUSE, label: 'Conjoint(e)'},
-              {type: RelationType.PARENT, label: 'Parent'},
-              {type: RelationType.SIBLING, label: 'Frère/Sœur'},
-              {type: RelationType.FRIEND, label: 'Ami(e)'},
-              {type: RelationType.COLLEAGUE, label: 'Collègue'},
-              {type: RelationType.OTHER, label: 'Autre'},
-            ].map(({type, label}) => (
-              <TouchableOpacity
-                key={type}
-                style={[
-                  S.relationTypeOption,
-                  relationType === type && S.relationTypeOptionSelected
-                ]}
-                onPress={() => {
-                  setRelationType(type);
-                  setShowRelationTypePickerModal(false);
-                }}>
-                <Text style={[
-                  S.relationTypeOptionText,
-                  relationType === type && S.relationTypeOptionTextSelected
-                ]}>{label}</Text>
-              </TouchableOpacity>
-            ))}
-
-            <TouchableOpacity
-              style={[S.button, S.cancelButton]}
-              onPress={() => setShowRelationTypePickerModal(false)}>
-              <Text style={S.cancelButtonText}>Annuler</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </ScrollView>
     </View>
   );
@@ -1091,7 +614,7 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
 const styles = (theme: any) => StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: Neutral[50],
+    backgroundColor: theme.background,
   },
   // ── Header ──
   header: {

@@ -7,10 +7,11 @@ import {
   StyleSheet,
   FlatList,
   Alert,
-  Modal,
 } from 'react-native';
 import {Picker} from '@react-native-picker/picker';
+import Modal from '../components/AppModal';
 import {useTheme} from '../context/ThemeContext';
+import ScreenHeader from '../components/ScreenHeader';
 import {ContactGroup, GroupType} from '../types';
 import StorageService from '../services/StorageService';
 import ContactService from '../services/ContactService';
@@ -96,19 +97,12 @@ const GroupsScreen: React.FC<GroupsScreenProps> = ({navigation}) => {
 
   return (
     <View style={styles(theme).container}>
-      <View style={styles(theme).header}>
-        <View style={styles(theme).headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-            <Text style={styles(theme).backButtonText}>←</Text>
-          </TouchableOpacity>
-          <Text style={styles(theme).title}>Mes groupes</Text>
-          <TouchableOpacity
-            style={styles(theme).addButton}
-            onPress={() => setModalVisible(true)}>
-            <Text style={styles(theme).addButtonText}>+ Ajouter</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+      <ScreenHeader
+        title="Mes groupes"
+        onBack={() => navigation.goBack()}
+        actionIcon="add"
+        onAction={() => setModalVisible(true)}
+      />
 
       <FlatList
         data={groups}
@@ -205,7 +199,7 @@ const GroupsScreen: React.FC<GroupsScreenProps> = ({navigation}) => {
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: theme.background,
   },
   header: {
     flexDirection: 'column',

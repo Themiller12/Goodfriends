@@ -5,7 +5,6 @@ import {
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  Modal,
   TextInput,
   Linking,
   Alert,
@@ -13,11 +12,14 @@ import {
   Animated,
   Dimensions,
 } from 'react-native';
+import Modal from '../components/AppModal';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import ScreenHeader from '../components/ScreenHeader';
 import {useTheme} from '../context/ThemeContext';
 import {Neutral, Spacing, Radius, Shadow, Typography, Semantic} from '../theme/designSystem';
 import StorageService from '../services/StorageService';
-import {Contact, Child} from '../types';
+import {buildBirthdayCalendarUrl} from '../utils/birthday';
+import {Child} from '../types';
 
 interface BirthdayItem {
   id: string;
@@ -262,27 +264,7 @@ const BirthdaysScreen: React.FC<BirthdaysScreenProps> = ({navigation}) => {
   };
 
   const handleAddToCalendar = async (item: BirthdayItem) => {
-    const birthDate = new Date(item.dateOfBirth);
-    const today = new Date();
-    const nextBirthday = new Date(
-      today.getFullYear(),
-      birthDate.getMonth(),
-      birthDate.getDate(),
-      0, 0, 0, 0
-    );
-    
-    if (nextBirthday < today) {
-      nextBirthday.setFullYear(today.getFullYear() + 1);
-    }
-
-    const title = `Anniversaire ${item.name} 🎂`;
-    // Format: YYYYMMDD pour un événement toute la journée
-    const startDateStr = nextBirthday.toISOString().split('T')[0].replace(/-/g, '');
-    const endDateStr = new Date(nextBirthday.getTime() + 24 * 60 * 60 * 1000).toISOString().split('T')[0].replace(/-/g, '');
-
-    // Google Calendar URL (fonctionne sur Android et web)
-    // recur=RRULE:FREQ=YEARLY pour répéter chaque année
-    const googleCalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title)}&dates=${startDateStr}/${endDateStr}&details=${encodeURIComponent('🎉 Anniversaire de ' + item.name)}&recur=RRULE:FREQ=YEARLY&location=&trp=false&sprop=name:GoodFriends`;
+    const {url: googleCalUrl, next: nextBirthday, title} = buildBirthdayCalendarUrl(new Date(item.dateOfBirth), item.name);
     
     try {
       // Ouvrir directement sans vérifier canOpenURL (problème sur Android)
@@ -341,7 +323,7 @@ const BirthdaysScreen: React.FC<BirthdaysScreenProps> = ({navigation}) => {
           <TouchableOpacity
             style={styles(theme).calendarButton}
             onPress={() => handleAddToCalendar(item)}>
-            <Text style={styles(theme).calendarButtonText}>📅</Text>
+            <MaterialIcons name="event" size={20} color={theme.primary} />
           </TouchableOpacity>
           
           {isToday && (
@@ -382,25 +364,15 @@ const BirthdaysScreen: React.FC<BirthdaysScreenProps> = ({navigation}) => {
         })}
       </View>
 
-      <View style={styles(theme).header}>
-        <View style={styles(theme).headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles(theme).backButton}>
-            <View style={styles(theme).backBtnCircle}>
-              <MaterialIcons name="arrow-back" size={22} color="#383830" />
-            </View>
-          </TouchableOpacity>
-          <View>
-            <Text style={styles(theme).headerTitle}>Anniversaires 🎂</Text>
-            <Text style={styles(theme).headerSubtitle}>
-              {birthdays.length} anniversaire{birthdays.length > 1 ? 's' : ''} à venir
-            </Text>
-          </View>
-        </View>
-      </View>
+      <ScreenHeader
+        title="Anniversaires"
+        subtitle={`${birthdays.length} anniversaire${birthdays.length > 1 ? 's' : ''} à venir`}
+        onBack={() => navigation.goBack()}
+      />
 
       {birthdays.length === 0 ? (
         <View style={styles(theme).emptyContainer}>
-          <Text style={styles(theme).emptyIcon}>🎂</Text>
+          <MaterialIcons name="cake" size={48} color={Neutral[300]} />
           <Text style={styles(theme).emptyText}>Aucun anniversaire</Text>
           <Text style={styles(theme).emptySubtext}>
             Ajoutez des dates de naissance à vos contacts
@@ -499,7 +471,7 @@ const BirthdaysScreen: React.FC<BirthdaysScreenProps> = ({navigation}) => {
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fcf9f0',
+    backgroundColor: theme.background,
   },
   header: {
     backgroundColor: 'transparent',

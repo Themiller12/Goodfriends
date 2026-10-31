@@ -7,12 +7,12 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
-  Modal,
   Platform,
   FlatList,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import {Contact, Child, RelationType, FamilyMemberInfo} from '../types';
+import Modal from '../components/AppModal';
+import {Contact, RelationType, FamilyMemberInfo} from '../types';
 import ContactService from '../services/ContactService';
 import StorageService from '../services/StorageService';
 import StorageServiceAPI from '../services/StorageServiceAPI';
@@ -283,6 +283,8 @@ const ManageRelationsScreen: React.FC<ManageRelationsScreenProps> = ({
       case RelationType.COUSIN:     return 'Cousin(e)';
       case RelationType.STEPMOTHER: return 'Belle-mère';
       case RelationType.STEPFATHER: return 'Beau-père';
+      case RelationType.GRANDPARENT: return 'Grand-parent';
+      case RelationType.GRANDCHILD: return 'Petit-enfant';
       case RelationType.FRIEND:     return 'Ami(e)';
       case RelationType.COLLEAGUE:  return 'Collègue';
       default:                      return 'Autre';
@@ -487,6 +489,7 @@ const ManageRelationsScreen: React.FC<ManageRelationsScreenProps> = ({
                 mode="date"
                 display="default"
                 onChange={onChildDateChange}
+                minimumDate={new Date(1900, 0, 1)}
                 maximumDate={new Date()}
               />
             )}

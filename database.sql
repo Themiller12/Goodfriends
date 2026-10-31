@@ -22,6 +22,11 @@ CREATE TABLE users (
     photo LONGTEXT,
     is_verified BOOLEAN DEFAULT FALSE,
     verification_code VARCHAR(10),
+    reset_code_hash VARCHAR(255) NULL,
+    reset_code_expires_at DATETIME NULL,
+    reset_attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    verification_expires_at DATETIME NULL,
+    verification_attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     last_login TIMESTAMP NULL,
@@ -120,7 +125,7 @@ CREATE TABLE relationships (
     id INT AUTO_INCREMENT PRIMARY KEY,
     contact_id VARCHAR(50) NOT NULL,
     related_contact_id VARCHAR(50) NOT NULL,
-    relation_type ENUM('spouse', 'child', 'parent', 'father', 'mother', 'sibling', 'cousin', 'stepmother', 'stepfather', 'friend', 'colleague', 'other') NOT NULL,
+    relation_type ENUM('spouse', 'child', 'parent', 'father', 'mother', 'sibling', 'cousin', 'stepmother', 'stepfather', 'grandparent', 'grandchild', 'friend', 'colleague', 'other') NOT NULL,
     custom_relation_label VARCHAR(255),
     notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -204,6 +209,14 @@ CREATE TABLE group_chat_messages (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (group_id) REFERENCES group_chats(id) ON DELETE CASCADE,
     INDEX idx_group_created (group_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Limitation des tentatives (connexion, emails)
+CREATE TABLE IF NOT EXISTS rate_limits (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    bucket VARCHAR(100) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_bucket_created (bucket, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Données de test (optionnel)

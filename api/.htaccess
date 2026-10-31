@@ -1,13 +1,26 @@
-# Autoriser l'accès aux fichiers PHP
-<Files ~ "\.(php)$">
-    Order allow,deny
-    Allow from all
-</Files>
+# Seuls les points d'entrée PHP de l'API sont accessibles depuis l'extérieur
+Options -Indexes
 
-# Garder les paramètres de requête
-RewriteEngine Off
+# Transmettre l'en-tête Authorization à PHP (CGI / FastCGI)
+SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
 
-# Activer les headers CORS
-Header always set Access-Control-Allow-Origin "*"
-Header always set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
-Header always set Access-Control-Allow-Headers "Content-Type, Authorization"
+# Fichiers internes : bibliothèques, configuration, secrets, documentation, migrations
+<FilesMatch "^(config|config\.local|config\.local\.example|family_links|rate_limit|FCMService|Mailer)\.php$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+<FilesMatch "(\.(json|sql|md|log|env|ini|sh|bak|enc)|^\..*)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>

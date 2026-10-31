@@ -10,6 +10,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme, THEMES} from '../context/ThemeContext';
+import ScreenHeader from '../components/ScreenHeader';
 
 const THEMES_ARRAY = Object.values(THEMES);
 
@@ -59,19 +60,11 @@ const ThemeSettingsScreen: React.FC<ThemeSettingsScreenProps> = ({navigation}) =
 
   return (
     <ScrollView style={styles(currentTheme).container}>
-      <View style={styles(currentTheme).header}>
-        <View style={styles(currentTheme).headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles(currentTheme).backButton}>
-            <View style={styles(currentTheme).backBtnCircle}>
-              <MaterialIcons name="arrow-back" size={22} color="#383830" />
-            </View>
-          </TouchableOpacity>
-          <View>
-            <Text style={styles(currentTheme).title}>Choisir un thème</Text>
-            <Text style={styles(currentTheme).subtitle}>Personnalisez l’apparence de l’application</Text>
-          </View>
-        </View>
-      </View>
+      <ScreenHeader
+        title="Choisir un thème"
+        subtitle="Personnalisez l’apparence de l’application"
+        onBack={() => navigation.goBack()}
+      />
 
       <View style={styles(currentTheme).themesContainer}>
         {THEMES_ARRAY.map((theme) => (
@@ -86,7 +79,7 @@ const ThemeSettingsScreen: React.FC<ThemeSettingsScreenProps> = ({navigation}) =
               <Text style={styles(currentTheme).themeName}>{theme.name}</Text>
               {selectedTheme === theme.id && (
                 <View style={styles(currentTheme).selectedBadge}>
-                  <Text style={styles(currentTheme).selectedText}>✓</Text>
+                  <MaterialIcons name="check" size={16} color="#FFF" />
                 </View>
               )}
             </View>
@@ -122,7 +115,7 @@ const ThemeSettingsScreen: React.FC<ThemeSettingsScreenProps> = ({navigation}) =
               defaultView === 'graph' && styles(currentTheme).viewOptionSelected,
             ]}
             onPress={() => handleSelectDefaultView('graph')}>
-            <Text style={styles(currentTheme).viewOptionIcon}>⊙</Text>
+            <MaterialIcons name="bubble-chart" size={28} color={defaultView === 'graph' ? currentTheme.primary : '#65655c'} />
             <Text style={[
               styles(currentTheme).viewOptionLabel,
               defaultView === 'graph' && styles(currentTheme).viewOptionLabelSelected,
@@ -139,7 +132,7 @@ const ThemeSettingsScreen: React.FC<ThemeSettingsScreenProps> = ({navigation}) =
               defaultView === 'list' && styles(currentTheme).viewOptionSelected,
             ]}
             onPress={() => handleSelectDefaultView('list')}>
-            <Text style={styles(currentTheme).viewOptionIcon}>☰</Text>
+            <MaterialIcons name="view-list" size={28} color={defaultView === 'list' ? currentTheme.primary : '#65655c'} />
             <Text style={[
               styles(currentTheme).viewOptionLabel,
               defaultView === 'list' && styles(currentTheme).viewOptionLabelSelected,
@@ -159,7 +152,7 @@ const ThemeSettingsScreen: React.FC<ThemeSettingsScreenProps> = ({navigation}) =
 const styles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fcf9f0',
+    backgroundColor: theme.background,
   },
   header: {
     backgroundColor: '#fcf9f0',

@@ -191,3 +191,47 @@ function sendWelcomeEmail(string $email, string $firstName): bool {
         return false;
     }
 }
+
+/**
+ * Envoie le code de réinitialisation du mot de passe par email.
+ */
+function sendPasswordResetEmail(string $email, string $firstName, string $code, int $ttlMinutes): bool {
+    try {
+        $mail = createMailer();
+        $mail->addAddress($email);
+        $mail->isHTML(true);
+        $mail->Subject = 'Réinitialisation de votre mot de passe GoodFriends';
+        $mail->Body = '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f8f4ea;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0">
+  <tr><td align="center" style="padding:40px 20px;">
+    <table width="540" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+      <tr><td style="background:#9c6b3c;padding:32px 40px;text-align:center;">
+        <h1 style="margin:0;color:#ffffff;font-size:26px;letter-spacing:1px;">GoodFriends</h1>
+      </td></tr>
+      <tr><td style="padding:40px;">
+        <h2 style="color:#383830;font-size:20px;margin:0 0 12px;">Bonjour ' . htmlspecialchars($firstName) . ' !</h2>
+        <p style="color:#65655c;font-size:15px;line-height:1.6;margin:0 0 28px;">
+          Vous avez demandé la réinitialisation de votre mot de passe. Entrez le code ci-dessous dans l\'application.
+        </p>
+        <div style="background:#f8f4ea;border-radius:12px;padding:28px;text-align:center;margin:0 0 28px;">
+          <p style="margin:0 0 8px;color:#65655c;font-size:13px;text-transform:uppercase;letter-spacing:1px;">Code de réinitialisation</p>
+          <p style="margin:0;font-size:42px;font-weight:bold;letter-spacing:10px;color:#9c6b3c;">' . htmlspecialchars($code) . '</p>
+        </div>
+        <p style="color:#aaa;font-size:13px;margin:0;">Ce code expire dans <strong>' . $ttlMinutes . ' minutes</strong>. Si vous n\'êtes pas à l\'origine de cette demande, ignorez cet email : votre mot de passe reste inchangé.</p>
+      </td></tr>
+      <tr><td style="background:#f8f4ea;padding:20px 40px;text-align:center;">
+        <p style="margin:0;color:#aaa;font-size:12px;">&copy; ' . date('Y') . ' GoodFriends</p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body></html>';
+        $mail->AltBody = "Bonjour $firstName,\n\nVotre code de réinitialisation GoodFriends est : $code\n\nCe code expire dans $ttlMinutes minutes. Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.";
+        $mail->send();
+        return true;
+    } catch (Exception $e) {
+        setLastMailerError('sendPasswordResetEmail failed: ' . $e->getMessage());
+        return false;
+    }
+}

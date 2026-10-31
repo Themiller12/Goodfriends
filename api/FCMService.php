@@ -235,7 +235,7 @@ class FCMService {
 
         // Compter les messages non lus de cet expéditeur et récupérer les aperçus
         $unreadStmt = $db->prepare(
-            "SELECT message, photo_url, created_at
+            "SELECT message, photo_url, attachment_type, created_at
              FROM messages
              WHERE sender_id = :sender_id AND receiver_id = :recipient_id AND is_read = FALSE
              ORDER BY created_at ASC"
@@ -256,6 +256,11 @@ class FCMService {
             $previews = [];
             foreach (array_slice($unreadRows, -3) as $row) {
                 $text = !empty($row['message']) ? $row['message'] : '📷 Photo';
+                if ($row['attachment_type'] === 'voice') {
+                    $text = '🎤 Message vocal';
+                } elseif ($row['attachment_type'] === 'file') {
+                    $text = '📎 Fichier';
+                }
                 $previews[] = substr($text, 0, 60);
             }
             $body = implode("\n", $previews);

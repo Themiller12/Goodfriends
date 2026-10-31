@@ -1,6 +1,10 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import API_CONFIG from '../config/api';
+import SecureStorage from './SecureStorage';
+
+const TOKEN_KEY = 'auth_token';
+const LEGACY_TOKEN_KEY = '@auth_token';
 
 type UnauthorizedListener = () => void;
 
@@ -32,7 +36,7 @@ class ApiClient {
     this.client.interceptors.request.use(
       async (config) => {
         if (!this.token) {
-          this.token = await AsyncStorage.getItem('@auth_token');
+          this.token = await SecureStorage.getItem(TOKEN_KEY, LEGACY_TOKEN_KEY);
         }
         if (this.token) {
           config.headers.Authorization = `Bearer ${this.token}`;
@@ -69,12 +73,19 @@ class ApiClient {
 
   async setToken(token: string) {
     this.token = token;
-    await AsyncStorage.setItem('@auth_token', token);
+    await SecureStorage.setItem(TOKEN_KEY, token);
+  }
+
+  async getToken(): Promise<string | null> {
+    if (!this.token) {
+      this.token = await SecureStorage.getItem(TOKEN_KEY, LEGACY_TOKEN_KEY);
+    }
+    return this.token;
   }
 
   async clearToken() {
     this.token = null;
-    await AsyncStorage.removeItem('@auth_token');
+    await SecureStorage.removeItem(TOKEN_KEY, LEGACY_TOKEN_KEY);
   }
 
   onUnauthorized(listener: UnauthorizedListener): () => void {

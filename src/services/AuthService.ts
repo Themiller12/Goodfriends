@@ -176,6 +176,66 @@ class AuthService {
     }
   }
 
+  // Modifier le mot de passe depuis le profil
+  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    try {
+      const response = await ApiClient.post<ApiResponse<undefined>>(
+        `${API_CONFIG.ENDPOINTS.AUTH}?action=change-password`,
+        { currentPassword, newPassword }
+      );
+
+      if (!response.success) {
+        throw new Error(response.message);
+      }
+    } catch (error: any) {
+      console.error('Error changing password:', error);
+      if (error.name === 'NetworkError') {
+        throw error;
+      }
+      throw new Error(error.response?.data?.message || error.message || 'Erreur lors de la modification du mot de passe');
+    }
+  }
+
+  // Envoyer un code de réinitialisation du mot de passe par email
+  async requestPasswordReset(email: string): Promise<void> {
+    try {
+      const response = await ApiClient.post<ApiResponse<undefined>>(
+        `${API_CONFIG.ENDPOINTS.AUTH}?action=forgot-password`,
+        { email }
+      );
+
+      if (!response.success) {
+        throw new Error(response.message);
+      }
+    } catch (error: any) {
+      console.error('Error requesting password reset:', error);
+      if (error.name === 'NetworkError') {
+        throw error;
+      }
+      throw new Error(error.response?.data?.message || error.message || "Erreur lors de l'envoi du code");
+    }
+  }
+
+  // Définir un nouveau mot de passe avec le code reçu par email
+  async resetPassword(email: string, code: string, newPassword: string): Promise<void> {
+    try {
+      const response = await ApiClient.post<ApiResponse<undefined>>(
+        `${API_CONFIG.ENDPOINTS.AUTH}?action=reset-password`,
+        { email, code, newPassword }
+      );
+
+      if (!response.success) {
+        throw new Error(response.message);
+      }
+    } catch (error: any) {
+      console.error('Error resetting password:', error);
+      if (error.name === 'NetworkError') {
+        throw error;
+      }
+      throw new Error(error.response?.data?.message || error.message || 'Erreur lors de la modification du mot de passe');
+    }
+  }
+
   // Déconnexion
   async logout(): Promise<void> {
     try {
@@ -190,12 +250,12 @@ class AuthService {
 
   // Vérifier si l'utilisateur est connecté
   async isLoggedIn(): Promise<boolean> {
-    const token = await AsyncStorage.getItem('@auth_token');
+    const token = await ApiClient.getToken();
     return token !== null;
   }
 
   async validateSession(): Promise<boolean> {
-    const token = await AsyncStorage.getItem('@auth_token');
+    const token = await ApiClient.getToken();
     if (!token) {
       return false;
     }

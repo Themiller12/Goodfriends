@@ -36,9 +36,18 @@ local.properties
 
 # Firebase - fichiers sensibles à ne jamais committer
 api/firebase-service-account.json
+api/config.local.php
+android/keystore.properties
 google-services.json
 GoogleService-Info.plist
 .kotlin/
+
+# Artefacts / fichiers temporaires
+dist/
+*.log
+hs_err_pid*
+*.bak
+api/uploads/
 
 # node.js
 #

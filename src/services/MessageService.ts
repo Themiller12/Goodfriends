@@ -5,6 +5,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import CacheService from './CacheService';
 import E2EEService from './E2EEService';
 
+// Doit rester aligné avec api/messages.php
+export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const ALLOWED_FILE_EXTENSIONS = [
+  'pdf', 'txt', 'csv', 'rtf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+  'odt', 'ods', 'odp', 'zip', 'mp3', 'm4a', 'wav', 'mp4',
+];
+
 export interface MessageReaction {
   emoji: string;
   userId: string;
@@ -16,6 +23,12 @@ export interface Message {
   receiverId: string;
   message: string | null;
   photoUrl?: string | null;
+  attachmentType?: 'voice' | 'file' | null;
+  attachmentName?: string | null;
+  attachmentMime?: string | null;
+  attachmentSize?: number | null;
+  attachmentDurationMs?: number | null;
+  attachmentUrl?: string | null;
   isRead: boolean;
   createdAt: string;
   senderEmail?: string;
@@ -136,6 +149,45 @@ class MessageService {
       console.error('Erreur lors de l\'envoi de la photo:', error);
       throw error;
     }
+  }
+
+  /**
+   * Envoyer un message vocal ou un fichier (base64). Chiffré côté serveur au repos, pas en E2EE.
+   */
+  async sendAttachment(
+    receiverId: string,
+    kind: 'voice' | 'file',
+    dataBase64: string,
+    options: { fileName?: string; durationMs?: number; replyToId?: string } = {},
+  ): Promise<Message> {
+    try {
+      const response = await ApiClient.post('/messages.php?action=send-attachment', {
+        receiverId,
+        kind,
+        data: dataBase64,
+        ...(options.fileName ? {fileName: options.fileName} : {}),
+        ...(options.durationMs !== undefined ? {durationMs: options.durationMs} : {}),
+        ...(options.replyToId ? {replyToId: options.replyToId} : {}),
+      }, {timeout: 90000}) as any;
+
+      await CacheService.invalidateCache('conversations');
+      return response.data as Message;
+    } catch (error) {
+      console.error('Erreur lors de l\'envoi de la pièce jointe:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Lien signé temporaire (2 min) pour lire ou télécharger une pièce jointe
+   */
+  async getAttachmentLink(messageId: string): Promise<string> {
+    const res = await ApiClient.get<any>(`/messages.php?action=attachment-link&id=${encodeURIComponent(messageId)}`);
+    const url = res?.data?.url;
+    if (!url) {
+      throw new Error('Lien indisponible');
+    }
+    return url;
   }
 
   /**

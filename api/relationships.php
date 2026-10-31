@@ -1,5 +1,6 @@
 <?php
 require_once 'config.php';
+require_once 'family_links.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -112,26 +113,6 @@ if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'relatio
         sendResponse(false, 'Contacts non trouvés', null, 404);
     }
     
-    // Fonction pour obtenir le type de relation inverse
-    function getInverseRelationType($type) {
-        switch ($type) {
-            case 'spouse':
-                return 'spouse'; // Conjoint est réciproque
-            case 'parent':
-                return 'child'; // Si A est parent de B, alors B est enfant de A
-            case 'child':
-                return 'parent'; // Si A est enfant de B, alors B est parent de A
-            case 'sibling':
-                return 'sibling'; // Frère/Sœur est réciproque
-            case 'friend':
-                return 'friend'; // Ami est réciproque
-            case 'colleague':
-                return 'colleague'; // Collègue est réciproque
-            default:
-                return 'other'; // Autre reste autre
-        }
-    }
-    
     // Ajouter la relation principale (A -> B)
     $customLabel = isset($data['customRelationLabel']) ? $data['customRelationLabel'] : null;
     $query = "INSERT INTO relationships (contact_id, related_contact_id, relation_type, notes, custom_relation_label) 
@@ -159,6 +140,7 @@ if ($method === 'POST' && isset($_GET['action']) && $_GET['action'] === 'relatio
         $inverseStmt->bindParam(':notes', $data['notes']);
         $inverseStmt->execute();
         
+        recomputeFamilyLinks($db, $userId);
         sendResponse(true, 'Relation ajoutée avec succès', ['id' => $mainId], 201);
     } else {
         sendResponse(false, 'Erreur lors de l\'ajout', null, 500);
@@ -175,6 +157,16 @@ if ($method === 'DELETE' && isset($_GET['action']) && $_GET['action'] === 'relat
     $contactId = $_GET['contactId'];
     $relatedContactId = $_GET['relatedContactId'];
     
+    // Les deux contacts doivent appartenir à l'utilisateur
+    $ownStmt = $db->prepare("SELECT id FROM contacts WHERE id IN (:id1, :id2) AND user_id = :user_id");
+    $ownStmt->bindParam(':id1', $contactId);
+    $ownStmt->bindParam(':id2', $relatedContactId);
+    $ownStmt->bindParam(':user_id', $userId);
+    $ownStmt->execute();
+    if ($ownStmt->rowCount() !== 2) {
+        sendResponse(false, 'Contacts non trouvés', null, 404);
+    }
+    
     // Supprimer dans les deux sens (bidirectionnel)
     $query = "DELETE FROM relationships 
               WHERE (contact_id = :id1 AND related_contact_id = :id2) 
@@ -185,6 +177,7 @@ if ($method === 'DELETE' && isset($_GET['action']) && $_GET['action'] === 'relat
     $stmt->bindParam(':id2', $relatedContactId);
     
     if ($stmt->execute()) {
+        recomputeFamilyLinks($db, $userId);
         sendResponse(true, 'Relation supprimée avec succès');
     } else {
         sendResponse(false, 'Erreur lors de la suppression', null, 500);
