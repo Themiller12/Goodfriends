@@ -16,6 +16,7 @@ import AppState from './AppState';
 
 class FirebaseService {
   private fcmToken: string | null = null;
+  private listenersReady = false;
 
   /**
    * Initialiser Firebase Messaging et demander les permissions
@@ -41,30 +42,43 @@ class FirebaseService {
       console.log('[FirebaseService] FCM Token:', token);
 
       // Toujours comparer avec le token en cache — si différent, re-enregistrer
-      // (le token peut avoir été renouvelé pendant que l'app était fermée)
+      // (le token peut avoir été renouvelé pendant que l'app était fermée, ou un autre compte s'être connecté)
       const cachedToken = await AsyncStorage.getItem('fcm_token');
-      if (token !== cachedToken) {
-        console.log('[FirebaseService] Token changé depuis la dernière session, re-enregistrement...');
+      const cacheValue = await this.buildCacheValue(token);
+      if (cacheValue !== cachedToken) {
+        console.log('[FirebaseService] Token ou compte changé depuis la dernière session, re-enregistrement...');
         await this.registerToken(token);
       } else {
         console.log('[FirebaseService] Token inchangé');
       }
 
-      // Écouter les rafraîchissements de token pendant que l'app tourne
-      onTokenRefresh(m, async (newToken) => {
-        console.log('[FirebaseService] Token refreshed:', newToken);
-        this.fcmToken = newToken;
-        await this.registerToken(newToken);
-      });
+      // Les listeners ne doivent être posés qu'une fois, même si initialize() est rappelée après une reconnexion
+      if (!this.listenersReady) {
+        this.listenersReady = true;
 
-      // Configurer les listeners de notifications
-      this.setupNotificationListeners();
+        // Écouter les rafraîchissements de token pendant que l'app tourne
+        onTokenRefresh(m, async (newToken) => {
+          console.log('[FirebaseService] Token refreshed:', newToken);
+          this.fcmToken = newToken;
+          await this.registerToken(newToken);
+        });
+
+        // Configurer les listeners de notifications
+        this.setupNotificationListeners();
+      }
 
       return true;
     } catch (error) {
       console.error('[FirebaseService] Initialization error:', error);
       return false;
     }
+  }
+
+  // Le cache associe le token au compte connecté : un autre compte sur le même appareil doit ré-enregistrer
+  private async buildCacheValue(token: string): Promise<string> {
+    const userStr = await AsyncStorage.getItem('@current_user');
+    const userId = userStr ? JSON.parse(userStr)?.id : '';
+    return `${userId}:${token}`;
   }
 
   /**
@@ -79,7 +93,7 @@ class FirebaseService {
 
       if ((response as any).success) {
         console.log('[FirebaseService] Token enregistré avec succès');
-        await AsyncStorage.setItem('fcm_token', token);
+        await AsyncStorage.setItem('fcm_token', await this.buildCacheValue(token));
       }
     } catch (error) {
       console.error('[FirebaseService] Erreur enregistrement token:', error);
@@ -99,22 +113,43 @@ class FirebaseService {
       const body = remoteMessage.notification?.body ?? null;
 
       if (data.type === 'message') {
+        await NotificationService.markMessageNotified(data.messageId);
         // Ne pas notifier si la conversation est déjà ouverte
         if (!AppState.isChatOpen(data.senderId)) {
-          await NotificationService.showMessageNotification(
-            data.senderName || data.senderEmail || '',
-            data.senderEmail || '',
-            body,
-            data.senderId,
-            data.senderFirstName,
-            data.senderLastName,
-          );
+          if (data.encrypted === '1') {
+            await NotificationService.showPushMessageNotification(data);
+          } else {
+            await NotificationService.showMessageNotification(
+              data.senderName || data.senderEmail || '',
+              data.senderEmail || '',
+              body,
+              data.senderId,
+              data.senderFirstName,
+              data.senderLastName,
+            );
+          }
         }
       } else if (data.type === 'friend_request') {
         await NotificationService.showFriendRequestNotification(
           data.senderName || '',
           data.senderEmail || '',
           data.senderId,
+        );
+      } else if (data.type === 'group_message') {
+        // Ne pas notifier si le groupe est déjà ouvert
+        if (!AppState.isChatOpen(`group:${data.groupId}`)) {
+          await NotificationService.showGenericNotification(
+            remoteMessage.notification?.title || data.groupName || 'Nouveau message',
+            remoteMessage.notification?.body ?? '',
+            data,
+          );
+        }
+      } else if (remoteMessage.notification?.title) {
+        // Réactions, ajout à un groupe… : Android n'affiche pas seul les notifications reçues au premier plan
+        await NotificationService.showGenericNotification(
+          remoteMessage.notification.title,
+          remoteMessage.notification.body ?? '',
+          data,
         );
       }
     });
@@ -145,9 +180,7 @@ class FirebaseService {
    */
   async unregisterToken() {
     try {
-      await ApiClient.delete('/fcm_tokens.php', {
-        platform: Platform.OS,
-      } as any);
+      await ApiClient.delete(`/fcm_tokens.php?platform=${Platform.OS}`);
 
       await AsyncStorage.removeItem('fcm_token');
       console.log('[FirebaseService] Token supprimé avec succès');

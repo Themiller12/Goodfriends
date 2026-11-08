@@ -29,6 +29,7 @@ import OnlineStatusService from '../services/OnlineStatusService';
 import GroupChatService from '../services/GroupChatService';
 import CacheService from '../services/CacheService';
 import OnlineIndicator from '../components/OnlineIndicator';
+import MessagesLoading from '../components/MessagesLoading';
 import { Contact, GroupChat, GroupMember } from '../types';
 
 type NavigationProp = NativeStackNavigationProp<any>;
@@ -150,6 +151,8 @@ const ConversationsScreen: React.FC = () => {
 
       const unread = convs.reduce((sum, c) => sum + c.unreadCount, 0);
       setTotalUnread(unread);
+      // Le serveur a répondu : "Aucune conversation" devient une information fiable
+      setLoading(false);
     } catch (error) {
       if (!silent) Alert.alert('Erreur', 'Impossible de charger les conversations');
     } finally {
@@ -367,9 +370,7 @@ const ConversationsScreen: React.FC = () => {
         <View style={S.header}>
           <Text style={S.headerTitle}>Messages</Text>
         </View>
-        <View style={S.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.primary} />
-        </View>
+        <MessagesLoading variant="list" style={{ flex: 1 }} />
       </View>
     );
   }

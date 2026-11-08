@@ -34,6 +34,12 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Goodfriends utilise l'appareil photo pour prendre une photo et l'envoyer dans une conversation.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Goodfriends utilise le microphone pour enregistrer des messages vocaux.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Goodfriends accède à vos photos pour les envoyer dans une conversation.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string></string>
 	<key>UILaunchStoryboardName</key>

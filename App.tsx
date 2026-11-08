@@ -19,8 +19,9 @@ import AppNavigator from './src/navigation/AppNavigator';
 import NotificationService from './src/services/NotificationService';
 import MessageService from './src/services/MessageService';
 import FriendRequestService from './src/services/FriendRequestService';
+import OutboxService from './src/services/OutboxService';
 import AuthService from './src/services/AuthService';
-import FirebaseService from './src/services/FirebaseService';
+import {startNotificationsForUser} from './src/services/PushSetup';
 import {ThemeProvider} from './src/context/ThemeContext';
 import {KeyboardProvider} from 'react-native-keyboard-controller';
 
@@ -41,6 +42,8 @@ function App(): React.JSX.Element {
       });
     } else if (type === 'friend_request') {
       nav.navigate('MyFriends');
+    } else if ((type === 'group_message' || type === 'group_added') && data.groupId) {
+      nav.navigate('GroupChat', {groupId: data.groupId});
     }
   };
 
@@ -60,9 +63,9 @@ function App(): React.JSX.Element {
 
         // Sur Android, les données peuvent être dans userInfo ou data selon la version
         const info = notification.userInfo ?? notification.data ?? {};
-        const {type, senderId, senderEmail, senderName, senderFirstName, senderLastName} = info;
+        const {type, senderId, senderEmail, senderName, senderFirstName, senderLastName, groupId} = info;
         if (type) {
-          setTimeout(() => navigateFromNotification(type, {senderId, senderEmail, senderName, senderFirstName, senderLastName}), 500);
+          setTimeout(() => navigateFromNotification(type, {senderId, senderEmail, senderName, senderFirstName, senderLastName, groupId}), 500);
         }
 
         // Nécessaire pour iOS
@@ -105,12 +108,12 @@ function App(): React.JSX.Element {
         const isLoggedIn = await AuthService.isLoggedIn();
         
         if (isLoggedIn) {
-          // Initialiser Firebase Cloud Messaging
-          await FirebaseService.initialize();
+          // Firebase Cloud Messaging + notifications d'anniversaire
+          await startNotificationsForUser();
           
-          // Planifier les notifications d'anniversaire
-          await NotificationService.scheduleAllBirthdayNotifications();
-          
+          // Renvoyer les messages restés en attente (hors ligne lors de la session précédente)
+          OutboxService.flush();
+
           // Vérifier les nouveaux messages et demandes d'ami
           await MessageService.checkNewMessages();
           await FriendRequestService.checkNewFriendRequests();
@@ -130,6 +133,7 @@ function App(): React.JSX.Element {
         if (isLoggedIn) {
           MessageService.checkNewMessages();
           FriendRequestService.checkNewFriendRequests();
+          OutboxService.flush();
         }
       }
     };

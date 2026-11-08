@@ -10,10 +10,12 @@ import {
   Platform,
   ScrollView,
   Image,
+  ActivityIndicator,
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import AuthService from '../services/AuthService';
 import {commitCredentials} from '../services/AutofillService';
+import {startNotificationsForUser} from '../services/PushSetup';
 import {useTheme} from '../context/ThemeContext';
 import {Neutral, Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
 
@@ -40,6 +42,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({navigation}) => {
     try {
       await AuthService.login(email, password);
       commitCredentials();
+      // Sans attendre : FCM, rappels d'anniversaire (sinon rien avant le prochain démarrage de l'app)
+      startNotificationsForUser();
       navigation.reset({
         index: 0,
         routes: [{name: 'Home'}],
@@ -144,9 +148,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({navigation}) => {
             onPress={handleLogin}
             activeOpacity={0.85}
             disabled={loading}>
-            <Text style={S.btnText}>
-              {loading ? 'Connexion…' : 'Se connecter'}
-            </Text>
+            {loading ? (
+              <ActivityIndicator color="#FFF" />
+            ) : (
+              <Text style={S.btnText}>Se connecter</Text>
+            )}
           </TouchableOpacity>
 
           <TouchableOpacity

@@ -9,8 +9,12 @@ $userId = verifyToken(); // verifyToken() retourne directement l'user_id (string
 $method = $_SERVER['REQUEST_METHOD'];
 
 if ($method === 'POST') {
-    // Heartbeat : mettre à jour last_seen pour l'utilisateur courant
-    $stmt = $conn->prepare("UPDATE users SET last_seen = NOW() WHERE id = :id");
+    // Heartbeat : mettre à jour last_seen pour l'utilisateur courant (offline = quitter l'application)
+    $data = json_decode(file_get_contents('php://input'), true);
+    $setOffline = is_array($data) && !empty($data['offline']);
+    $stmt = $conn->prepare($setOffline
+        ? "UPDATE users SET last_seen = NULL WHERE id = :id"
+        : "UPDATE users SET last_seen = NOW() WHERE id = :id");
     $stmt->execute([':id' => $userId]);
     sendResponse(true, 'OK');
 }
@@ -40,13 +44,20 @@ if ($method === 'GET') {
 
     $placeholders = implode(',', array_fill(0, count($ids), '?'));
 
-    // online = last_seen dans les 5 dernières minutes ET privacy_show_online activé
+    // online = last_seen dans les 150 dernières secondes (heartbeat toutes les 60 s) ET privacy_show_online activé.
+    // Seuls les amis (demande acceptée) voient le statut ; les autres reçoivent toujours "hors ligne".
     $sql = "
         SELECT u.id,
                CASE
                  WHEN u.last_seen IS NOT NULL
-                   AND u.last_seen >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+                   AND u.last_seen >= DATE_SUB(NOW(), INTERVAL 150 SECOND)
                    AND COALESCE(p.privacy_show_online, 1) = 1
+                   AND (u.id = ? OR EXISTS (
+                         SELECT 1 FROM friend_requests fr
+                         WHERE fr.status = 'accepted'
+                           AND ((fr.sender_id = u.id AND fr.receiver_id = ?)
+                             OR (fr.receiver_id = u.id AND fr.sender_id = ?))
+                       ))
                  THEN 1
                  ELSE 0
                END AS online
@@ -56,7 +67,7 @@ if ($method === 'GET') {
     ";
 
     $stmt = $conn->prepare($sql);
-    $stmt->execute($ids);
+    $stmt->execute(array_merge([$userId, $userId, $userId], $ids));
     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     $result = [];

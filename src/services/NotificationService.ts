@@ -1,10 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {Platform, PermissionsAndroid, Alert, Linking} from 'react-native';
+import {Platform, PermissionsAndroid, Alert, Linking, NativeModules} from 'react-native';
 import PushNotification, {Importance} from 'react-native-push-notification';
 import StorageService from './StorageService';
+import E2EEService from './E2EEService';
+import ApiClient from './ApiClient';
 import {Contact, Child} from '../types';
 
 const NOTIFICATION_SETTINGS_KEY = '@notification_settings';
+const MESSAGE_SETTING_PENDING_KEY = '@notification_message_setting_pending';
+const MESSAGE_PREVIEWS_KEY = '@push_message_previews';
+const NOTIFIED_MESSAGES_KEY = '@notified_messages';
 
 interface NotificationSettings {
   birthdayNotificationsEnabled: boolean;
@@ -79,6 +84,22 @@ class NotificationService {
         (created) => console.log(`Friend requests channel created: ${created}`)
       );
     }
+  }
+
+  // Permission d'afficher des notifications (sans l'alarme exacte, réservée aux rappels d'anniversaire)
+  async requestPostNotificationsPermission(): Promise<boolean> {
+    if (Platform.OS === 'android' && Platform.Version >= 33) {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+        );
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      } catch (err) {
+        console.warn(err);
+        return false;
+      }
+    }
+    return true;
   }
 
   // Demander les permissions de notifications
@@ -367,10 +388,41 @@ class NotificationService {
   }
 
   // Activer/désactiver les notifications de messages
+  // Le serveur applique aussi ce réglage : il n'envoie plus de push (messages, réactions, groupes)
   async toggleMessageNotifications(enabled: boolean): Promise<void> {
     const settings = await this.getSettings();
     settings.messageNotificationsEnabled = enabled;
     await this.saveSettings(settings);
+    await this.pushMessageSettingToServer(enabled);
+  }
+
+  private async pushMessageSettingToServer(enabled: boolean): Promise<boolean> {
+    try {
+      await ApiClient.put('/notification_settings.php', {messageNotificationsEnabled: enabled});
+      await AsyncStorage.removeItem(MESSAGE_SETTING_PENDING_KEY);
+      return true;
+    } catch {
+      // Hors ligne : on réessaiera à la prochaine synchronisation
+      await AsyncStorage.setItem(MESSAGE_SETTING_PENDING_KEY, '1');
+      return false;
+    }
+  }
+
+  // Aligne le réglage local et le serveur (à appeler quand un utilisateur est connecté)
+  async syncMessageSettingWithServer(): Promise<void> {
+    try {
+      const settings = await this.getSettings();
+      if (await AsyncStorage.getItem(MESSAGE_SETTING_PENDING_KEY)) {
+        await this.pushMessageSettingToServer(settings.messageNotificationsEnabled);
+        return;
+      }
+      const response = await ApiClient.get('/notification_settings.php') as any;
+      const remote = response?.data?.messageNotificationsEnabled;
+      if (typeof remote === 'boolean' && remote !== settings.messageNotificationsEnabled) {
+        settings.messageNotificationsEnabled = remote;
+        await this.saveSettings(settings);
+      }
+    } catch {}
   }
 
   // Envoyer une notification pour un nouveau message
@@ -392,7 +444,7 @@ class NotificationService {
       return;
     }
 
-    const hasPermission = await this.requestPermissions();
+    const hasPermission = await this.requestPostNotificationsPermission();
     console.log(`[NotificationService] Has notification permission: ${hasPermission}`);
     
     if (!hasPermission) {
@@ -411,6 +463,7 @@ class NotificationService {
     
     PushNotification.localNotification({
       channelId: 'messages-channel',
+      ...(senderId ? {id: String(this.toNumericId(`msg_${senderId}`))} : {}),
       title: `💬 ${senderName || senderEmail}`,
       message: truncatedMessage,
       playSound: true,
@@ -432,6 +485,100 @@ class NotificationService {
     console.log('[NotificationService] Notification sent successfully');
   }
 
+  // Notification d'un message reçu par FCM. Les messages chiffrés de bout en bout arrivent sans texte :
+  // on les déchiffre ici pour afficher le contenu réel. Utilisable en arrière-plan (sans activité).
+  async showPushMessageNotification(data: Record<string, string>): Promise<void> {
+    const senderId = data.senderId;
+    if (!senderId) return;
+
+    const settings = await this.getSettings();
+    if (!settings.messageNotificationsEnabled) return;
+
+    if (Platform.OS === 'android' && Platform.Version >= 33) {
+      const allowed = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+      if (!allowed) return;
+    }
+
+    let text = 'Nouveau message';
+    if (data.encrypted === '1') {
+      try {
+        const userStr = await AsyncStorage.getItem('@current_user');
+        const currentUserId = userStr ? JSON.parse(userStr)?.id : null;
+        // Notification destinée à un autre compte (ancien utilisateur de l'appareil) : l'ignorer
+        if (!currentUserId || (data.recipientId && data.recipientId !== currentUserId)) return;
+        const decrypted = await E2EEService.decryptMessage({
+          currentUserId,
+          senderId,
+          receiverId: currentUserId,
+          receiverCiphertext: data.ciphertext,
+          receiverNonce: data.nonce,
+          receiverEphemeralPublicKey: data.ephemeralPublicKey,
+        });
+        if (decrypted) text = decrypted;
+      } catch {}
+      if (data.hasPhoto === '1') {
+        text = text === 'Nouveau message' ? '📷 Photo' : `📷 ${text}`;
+      }
+    }
+    text = text.length > 100 ? `${text.substring(0, 97)}...` : text;
+
+    // Cumuler les aperçus par expéditeur tant que la conversation n'a pas été ouverte
+    const raw = await AsyncStorage.getItem(MESSAGE_PREVIEWS_KEY);
+    const all: Record<string, {ids: string[]; previews: string[]; count: number}> = raw ? JSON.parse(raw) : {};
+    const entry = all[senderId] ?? {ids: [], previews: [], count: 0};
+    if (data.messageId && entry.ids.includes(data.messageId)) return;
+    if (data.messageId) entry.ids = [...entry.ids, data.messageId].slice(-50);
+    entry.count += 1;
+    entry.previews = [...entry.previews, text].slice(-3);
+    all[senderId] = entry;
+    await AsyncStorage.setItem(MESSAGE_PREVIEWS_KEY, JSON.stringify(all));
+
+    if (data.messageId) {
+      await this.markMessageNotified(data.messageId);
+    }
+
+    const senderName = data.senderName || data.senderEmail || '';
+    PushNotification.localNotification({
+      channelId: 'messages-channel',
+      id: String(this.toNumericId(`msg_${senderId}`)),
+      title: entry.count > 1 ? `💬 ${senderName} (${entry.count} nouveaux messages)` : `💬 ${senderName}`,
+      message: entry.previews[entry.previews.length - 1],
+      bigText: entry.previews.join('\n'),
+      playSound: true,
+      soundName: 'default',
+      importance: 'high',
+      vibrate: true,
+      vibration: 300,
+      priority: 'high',
+      userInfo: {
+        type: 'message',
+        senderId,
+        senderEmail: data.senderEmail || '',
+        senderName,
+        senderFirstName: data.senderFirstName || '',
+        senderLastName: data.senderLastName || '',
+      },
+    });
+  }
+
+  // Retirer la notification d'une conversation (ouverte ou lue) et réinitialiser son cumul d'aperçus
+  async clearMessageNotifications(senderId: string, conversationId?: string): Promise<void> {
+    PushNotification.cancelLocalNotification(String(this.toNumericId(`msg_${senderId}`)));
+    if (Platform.OS === 'android' && conversationId) {
+      // Notification affichée par FCM : tag msg_<conversation>, id 0
+      NativeModules.RNPushNotification?.clearLocalNotification?.(`msg_${conversationId}`, 0);
+    }
+    try {
+      const raw = await AsyncStorage.getItem(MESSAGE_PREVIEWS_KEY);
+      if (!raw) return;
+      const all = JSON.parse(raw);
+      if (all[senderId]) {
+        delete all[senderId];
+        await AsyncStorage.setItem(MESSAGE_PREVIEWS_KEY, JSON.stringify(all));
+      }
+    } catch {}
+  }
+
   // Envoyer une notification groupée pour plusieurs messages du même expéditeur
   async showGroupedMessageNotification(
     senderName: string,
@@ -443,7 +590,7 @@ class NotificationService {
   ): Promise<void> {
     const settings = await this.getSettings();
     if (!settings.messageNotificationsEnabled) return;
-    const hasPermission = await this.requestPermissions();
+    const hasPermission = await this.requestPostNotificationsPermission();
     if (!hasPermission) return;
 
     const title = `💬 ${senderName || senderEmail}`;
@@ -453,6 +600,7 @@ class NotificationService {
 
     PushNotification.localNotification({
       channelId: 'messages-channel',
+      ...(senderId ? {id: String(this.toNumericId(`msg_${senderId}`))} : {}),
       title,
       message,
       playSound: true,
@@ -478,7 +626,7 @@ class NotificationService {
   ): Promise<void> {
     const settings = await this.getSettings();
     if (!settings.messageNotificationsEnabled) return;
-    const hasPermission = await this.requestPermissions();
+    const hasPermission = await this.requestPostNotificationsPermission();
     if (!hasPermission) return;
 
     const REACTION_LABELS: Record<string, string> = {
@@ -505,19 +653,67 @@ class NotificationService {
     });
   }
 
+  // Notification locale générique (ex. réaction, ajout à un groupe reçus pendant que l'app est ouverte)
+  async showGenericNotification(title: string, body: string, data: Record<string, string> = {}): Promise<void> {
+    const settings = await this.getSettings();
+    if (!settings.messageNotificationsEnabled) return;
+    if (!(await this.requestPostNotificationsPermission())) return;
+
+    PushNotification.localNotification({
+      channelId: 'messages-channel',
+      // Un seul bloc de notification par groupe : le dernier message remplace le précédent
+      ...(data.type === 'group_message' && data.groupId
+        ? {id: String(this.toNumericId(`group_${data.groupId}`))}
+        : {}),
+      title,
+      message: body,
+      playSound: true,
+      soundName: 'default',
+      importance: 'high',
+      vibrate: true,
+      vibration: 200,
+      priority: 'high',
+      userInfo: data,
+    });
+  }
+
+  // Retirer la notification d'un groupe (conversation ouverte)
+  clearGroupNotifications(groupId: string) {
+    PushNotification.cancelLocalNotification(String(this.toNumericId(`group_${groupId}`)));
+    if (Platform.OS === 'android') {
+      // Notification affichée par FCM : tag group_<id>, id 0
+      NativeModules.RNPushNotification?.clearLocalNotification?.(`group_${groupId}`, 0);
+    }
+  }
+
+  // Mémoriser un message déjà notifié pour que la vérification périodique ne le renotifie pas
+  async markMessageNotified(messageId?: string): Promise<void> {
+    if (!messageId) return;
+    try {
+      const raw = await AsyncStorage.getItem(NOTIFIED_MESSAGES_KEY);
+      const notified: string[] = raw ? JSON.parse(raw) : [];
+      if (!notified.includes(messageId)) {
+        notified.push(messageId);
+        await AsyncStorage.setItem(NOTIFIED_MESSAGES_KEY, JSON.stringify(notified.slice(-200)));
+      }
+    } catch {}
+  }
+
   // Envoyer une notification pour une nouvelle demande d'ami
   async showFriendRequestNotification(
     senderName: string,
     senderEmail: string,
     senderId?: string
   ): Promise<void> {
-    const hasPermission = await this.requestPermissions();
+    const hasPermission = await this.requestPostNotificationsPermission();
     if (!hasPermission) {
       return;
     }
 
     PushNotification.localNotification({
       channelId: 'friend-requests-channel',
+      // Même id par expéditeur : push FCM au premier plan + vérification périodique ne s'empilent pas
+      ...(senderId ? {id: String(this.toNumericId(`fr_${senderId}`))} : {}),
       title: '👋 Nouvelle demande d\'ami',
       message: `${senderName} (${senderEmail}) souhaite vous ajouter en ami`,
       playSound: true,

@@ -167,10 +167,18 @@ export interface GroupMessage {
   text: string;
   imageBase64?: string; // image en base64
   imageMime?: string;   // ex: 'image/jpeg'
+  attachmentType?: 'voice' | 'file' | null;
+  attachmentName?: string | null;
+  attachmentSize?: number | null;
+  attachmentDurationMs?: number | null;
+  attachmentUrl?: string | null;
+  pending?: boolean; // en attente d'envoi (hors ligne)
+  isEncrypted?: boolean; // chiffré de bout en bout (déchiffré à la réception)
   replyToId?: string;
   replyToText?: string;
   replyToSenderName?: string;
   reactions?: GroupMessageReaction[];
+  encryptedPayload?: { ciphertext: string; nonce: string; ephemeralPublicKey: string } | null; // à déchiffrer avant affichage
   createdAt: string; // ISO date string
 }
 
@@ -189,6 +197,7 @@ export interface GroupChat {
   name: string;
   members: GroupMember[];
   messages: GroupMessage[];
+  messagesLoaded?: boolean; // vrai si les messages viennent d'une réponse du serveur (et non du cache)
   createdAt: string; // ISO date string
   updatedAt: string; // ISO date string
 }

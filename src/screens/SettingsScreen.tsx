@@ -109,7 +109,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({navigation}) => {
         ))}
       </View>
 
-      <Text style={S.versionText}>GoodFriends — Version 1.6</Text>
+      <Text style={S.versionText}>GoodFriends — Version 2.0</Text>
     </ScrollView>
   );
 };

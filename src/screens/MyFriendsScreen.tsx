@@ -12,6 +12,7 @@ import {
 import {useTheme} from '../context/ThemeContext';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import ScreenHeader from '../components/ScreenHeader';
+import LoadingView from '../components/LoadingView';
 import {Neutral, Spacing, Radius, Shadow, Typography, Semantic} from '../theme/designSystem';
 import FriendRequestService, {FriendRequest, GoodFriendsUser} from '../services/FriendRequestService';
 import StorageService from '../services/StorageService';
@@ -29,6 +30,7 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
   const [pendingSent, setPendingSent] = useState<GoodFriendsUser[]>([]);
   const [acceptedFriends, setAcceptedFriends] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(false);
+  const [firstLoad, setFirstLoad] = useState(true);
   const [activeTab, setActiveTab] = useState<'received' | 'sent' | 'friends'>('received');
   const [onlineStatuses, setOnlineStatuses] = useState<Record<string, boolean>>({});
 
@@ -52,6 +54,7 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
       ]);
     } finally {
       setLoading(false);
+      setFirstLoad(false);
     }
   };
 
@@ -296,6 +299,7 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
             <RefreshControl refreshing={loading} onRefresh={loadData} />
           }
           ListEmptyComponent={
+            firstLoad ? <LoadingView label="Chargement…" /> :
             <View style={styles(theme).emptyContainer}>
               <MaterialIcons name="mail-outline" size={48} color={Neutral[300]} />
               <Text style={styles(theme).emptyText}>Aucune demande reçue</Text>
@@ -314,6 +318,7 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
             <RefreshControl refreshing={loading} onRefresh={loadData} />
           }
           ListEmptyComponent={
+            firstLoad ? <LoadingView label="Chargement…" /> :
             <View style={styles(theme).emptyContainer}>
               <MaterialIcons name="send" size={48} color={Neutral[300]} />
               <Text style={styles(theme).emptyText}>Aucune demande envoyée</Text>
@@ -332,6 +337,7 @@ const MyFriendsScreen: React.FC<MyFriendsScreenProps> = ({navigation}) => {
             <RefreshControl refreshing={loading} onRefresh={loadData} />
           }
           ListEmptyComponent={
+            firstLoad ? <LoadingView label="Chargement…" /> :
             <View style={styles(theme).emptyContainer}>
               <MaterialIcons name="group" size={48} color={Neutral[300]} />
               <Text style={styles(theme).emptyText}>Aucun ami</Text>

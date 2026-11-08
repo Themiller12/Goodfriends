@@ -14,6 +14,7 @@ import {Picker} from '@react-native-picker/picker';
 import Modal from '../components/AppModal';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import ScreenHeader from '../components/ScreenHeader';
+import LoadingView from '../components/LoadingView';
 import {useTheme} from '../context/ThemeContext';
 import {Neutral} from '../theme/designSystem';
 import {ContactGroup, GroupType, Contact} from '../types';
@@ -27,6 +28,7 @@ interface MyGroupsScreenProps {
 const MyGroupsScreen: React.FC<MyGroupsScreenProps> = ({navigation}) => {
   const {theme} = useTheme();
   const [groups, setGroups] = useState<ContactGroup[]>([]);
+  const [loadingGroups, setLoadingGroups] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [groupType, setGroupType] = useState<GroupType>(GroupType.OTHER);
@@ -58,8 +60,12 @@ const MyGroupsScreen: React.FC<MyGroupsScreenProps> = ({navigation}) => {
   }, [navigation]);
 
   const loadGroups = async () => {
-    const loadedGroups = await StorageService.getGroups();
-    setGroups(loadedGroups);
+    try {
+      const loadedGroups = await StorageService.getGroups();
+      setGroups(loadedGroups);
+    } finally {
+      setLoadingGroups(false);
+    }
   };
 
   const handleAddGroup = async () => {
@@ -207,6 +213,9 @@ const MyGroupsScreen: React.FC<MyGroupsScreenProps> = ({navigation}) => {
         keyExtractor={item => item.id}
         contentContainerStyle={styles(theme).listContent}
         ListEmptyComponent={
+          loadingGroups ? (
+            <LoadingView label="Chargement des groupes…" />
+          ) : (
           <View style={styles(theme).emptyContainer}>
             <MaterialIcons name="folder-open" size={48} color={Neutral[300]} />
             <Text style={styles(theme).emptyText}>Aucun groupe</Text>
@@ -214,6 +223,7 @@ const MyGroupsScreen: React.FC<MyGroupsScreenProps> = ({navigation}) => {
               Créez votre premier groupe pour organiser vos contacts
             </Text>
           </View>
+          )
         }
       />
 

@@ -10,6 +10,16 @@ $data = json_decode(file_get_contents('php://input'), true);
 
 $userId = verifyToken();
 
+// j***@d***.fr
+function maskEmail($email) {
+    $parts = explode('@', (string) $email, 2);
+    if (count($parts) !== 2) {
+        return '';
+    }
+    $domainParts = explode('.', $parts[1], 2);
+    return mb_substr($parts[0], 0, 1) . '***@' . mb_substr($domainParts[0], 0, 1) . '***' . (isset($domainParts[1]) ? '.' . $domainParts[1] : '');
+}
+
 // SEARCH USERS - Rechercher des utilisateurs par email ou téléphone
 if ($method === 'GET' && isset($_GET['action']) && $_GET['action'] === 'search') {
     
@@ -26,7 +36,9 @@ if ($method === 'GET' && isset($_GET['action']) && $_GET['action'] === 'search')
     $query = "SELECT u.id, u.email, 
               COALESCE(NULLIF(p.first_name, ''), 'Prénom') as first_name, 
               COALESCE(NULLIF(p.last_name, ''), 'Non renseigné') as last_name, 
-              p.phone, p.photo 
+              p.phone, p.photo,
+              COALESCE(p.privacy_allow_search_email, 1) AS allow_email,
+              COALESCE(p.privacy_allow_search_phone, 1) AS allow_phone
               FROM users u
               LEFT JOIN user_profiles p ON u.id = p.user_id
               WHERE u.id != :user_id 
@@ -60,12 +72,13 @@ if ($method === 'GET' && isset($_GET['action']) && $_GET['action'] === 'search')
             $requestStatus = $request['status'];
         }
         
+        // Ne pas divulguer l'email / le téléphone qu'un utilisateur a choisi de ne pas rendre cherchable
         $users[] = [
             'id' => $row['id'],
-            'email' => $row['email'],
+            'email' => (int)$row['allow_email'] === 1 ? $row['email'] : maskEmail($row['email']),
             'firstName' => $row['first_name'],
             'lastName' => $row['last_name'],
-            'phone' => $row['phone'],
+            'phone' => (int)$row['allow_phone'] === 1 ? $row['phone'] : null,
             'photo' => $row['photo'],
             'requestStatus' => $requestStatus
         ];
@@ -153,7 +166,8 @@ if ($method === 'GET' && isset($_GET['action']) && $_GET['action'] === 'pending'
               u.email, 
               COALESCE(NULLIF(p.first_name, ''), 'Prénom') as first_name, 
               COALESCE(NULLIF(p.last_name, ''), 'Non renseigné') as last_name, 
-              p.phone, p.date_of_birth, p.photo
+              p.phone, p.date_of_birth, p.photo,
+              COALESCE(p.privacy_profile_public, 1) AS profile_public
               FROM friend_requests fr
               JOIN users u ON fr.sender_id = u.id
               LEFT JOIN user_profiles p ON fr.sender_id = p.user_id
@@ -166,14 +180,16 @@ if ($method === 'GET' && isset($_GET['action']) && $_GET['action'] === 'pending'
     
     $requests = [];
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        // Profil privé : téléphone et date de naissance ne sont partagés qu'une fois la demande acceptée
+        $isPublic = (int)$row['profile_public'] === 1;
         $requests[] = [
             'id' => $row['id'],
             'senderId' => $row['sender_id'],
             'email' => $row['email'],
             'firstName' => $row['first_name'],
             'lastName' => $row['last_name'],
-            'phone' => $row['phone'],
-            'dateOfBirth' => $row['date_of_birth'],
+            'phone' => $isPublic ? $row['phone'] : null,
+            'dateOfBirth' => $isPublic ? $row['date_of_birth'] : null,
             'photo' => $row['photo'],
             'createdAt' => $row['created_at']
         ];
@@ -189,7 +205,9 @@ if ($method === 'GET' && isset($_GET['action']) && $_GET['action'] === 'sent') {
               u.email, 
               COALESCE(NULLIF(p.first_name, ''), 'Prénom') as first_name, 
               COALESCE(NULLIF(p.last_name, ''), 'Non renseigné') as last_name, 
-              p.phone, p.photo
+              p.phone, p.photo,
+              COALESCE(p.privacy_allow_search_email, 1) AS allow_email,
+              COALESCE(p.privacy_allow_search_phone, 1) AS allow_phone
               FROM friend_requests fr
               JOIN users u ON fr.receiver_id = u.id
               LEFT JOIN user_profiles p ON fr.receiver_id = p.user_id
@@ -204,10 +222,10 @@ if ($method === 'GET' && isset($_GET['action']) && $_GET['action'] === 'sent') {
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
         $requests[] = [
             'id' => $row['receiver_id'],
-            'email' => $row['email'],
+            'email' => (int)$row['allow_email'] === 1 ? $row['email'] : maskEmail($row['email']),
             'firstName' => $row['first_name'],
             'lastName' => $row['last_name'],
-            'phone' => $row['phone'],
+            'phone' => (int)$row['allow_phone'] === 1 ? $row['phone'] : null,
             'photo' => $row['photo'],
             'requestStatus' => 'pending'
         ];

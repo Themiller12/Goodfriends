@@ -15,6 +15,7 @@ import {
   BackHandler,
   Alert,
   StatusBar,
+  useWindowDimensions,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -28,6 +29,7 @@ import {getLastCallDate, invalidateCallCache} from '../services/PhoneActivitySer
 import {useTheme} from '../context/ThemeContext';
 import {Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
 import {getDaysUntilBirthday} from '../utils/birthday';
+import LoadingView from '../components/LoadingView';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {Linking} from 'react-native';
 
@@ -126,9 +128,11 @@ interface DashboardScreenProps {
 const DashboardScreen: React.FC<DashboardScreenProps> = ({navigation}) => {
   const {theme} = useTheme();
   const insets = useSafeAreaInsets();
+  const {width: screenWidth} = useWindowDimensions();
   const s = useMemo(() => createStyles(theme, insets.top), [theme, insets.top]);
 
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [loadingData, setLoadingData] = useState(true);
   const [userName, setUserName] = useState('');
   const [unreadCount, setUnreadCount] = useState(0);
   // Dates des derniers appels natifs (Android) — key = contact.id
@@ -148,6 +152,8 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({navigation}) => {
       setContacts(fresh);
     } catch (e) {
       console.log('[Dashboard] loadData error:', e);
+    } finally {
+      setLoadingData(false);
     }
   }, []);
 
@@ -296,6 +302,13 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({navigation}) => {
   };
 
   // ─── Rendu section anniversaires ───────────────────────────────────────────
+  // Les cartes se partagent toute la largeur (3 visibles au maximum, le reste défile)
+  const birthdayCardWidth = useMemo(() => {
+    const visible = Math.max(1, Math.min(3, upcomingBirthdays.length));
+    const available = screenWidth - Spacing.base * 2 - visible * Spacing.xs * 2;
+    return Math.floor(available / visible);
+  }, [screenWidth, upcomingBirthdays.length]);
+
   const renderBirthdayCard = ({item}: {item: BirthdayEntry}) => {
     const age = getNextBirthdayAge(item.dateOfBirth);
     const daysLabel = formatDaysUntil(item.daysUntil);
@@ -305,7 +318,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({navigation}) => {
     const initials = (item.firstName?.[0] || '').toUpperCase() + (item.lastName?.[0] || (item.isChild ? '👶' : '')).toUpperCase();
     return (
       <TouchableOpacity
-        style={[s.birthdayCard, isToday && s.birthdayCardToday]}
+        style={[s.birthdayCard, {width: birthdayCardWidth}, isToday && s.birthdayCardToday]}
         onPress={() => item.contactId && openContact(item.contactId)}
         activeOpacity={0.8}>
         <View style={s.birthdayAvatarWrapper}>
@@ -463,6 +476,10 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({navigation}) => {
           </View>
         </View>
 
+        {loadingData && contacts.length === 0 && (
+          <LoadingView label="Chargement de vos contacts…" style={{flex: 0}} />
+        )}
+
         {/* ── Section Anniversaires ── */}
         {upcomingBirthdays.length > 0 && (
           <View style={s.section}>
@@ -511,6 +528,18 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({navigation}) => {
               style={[s.emptyBtn, {backgroundColor: theme.primary}]}
               onPress={() => navigation.navigate('AddContact')}>
               <Text style={s.emptyBtnText}>Ajouter un proche</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.emptyBtnOutline, {borderColor: theme.primary}]}
+              onPress={() => navigation.navigate('Profile')}>
+              <MaterialIcons name="person-outline" size={20} color={theme.primary} />
+              <Text style={[s.emptyBtnOutlineText, {color: theme.primary}]}>Compléter mon profil</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.emptyBtnOutline, {borderColor: theme.primary}]}
+              onPress={() => navigation.navigate('SearchUsers')}>
+              <MaterialIcons name="search" size={20} color={theme.primary} />
+              <Text style={[s.emptyBtnOutlineText, {color: theme.primary}]}>Rechercher sur GoodFriends</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -767,6 +796,21 @@ const createStyles = (theme: any, topInset: number) =>
     },
     emptyBtnText: {
       color: '#fff',
+      ...Typography.titleSm,
+    },
+    emptyBtnOutline: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: Spacing.sm,
+      marginTop: Spacing.md,
+      paddingHorizontal: Spacing.xxl,
+      paddingVertical: Spacing.md,
+      borderRadius: Radius.full,
+      borderWidth: 1.5,
+      backgroundColor: 'transparent',
+    },
+    emptyBtnOutlineText: {
       ...Typography.titleSm,
     },
 

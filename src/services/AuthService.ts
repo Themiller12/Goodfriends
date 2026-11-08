@@ -3,6 +3,7 @@ import ApiClient from './ApiClient';
 import API_CONFIG from '../config/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import E2EEService from './E2EEService';
+import OnlineStatusService from './OnlineStatusService';
 
 interface ApiResponse<T> {
   success: boolean;
@@ -12,6 +13,23 @@ interface ApiResponse<T> {
 
 class AuthService {
   private currentUser: UserAccount | null = null;
+  private authListeners = new Set<(loggedIn: boolean) => void>();
+
+  // Notifie les connexions et déconnexions (la navigation, elle, ne relit l'état qu'au démarrage)
+  onAuthChange(callback: (loggedIn: boolean) => void): () => void {
+    this.authListeners.add(callback);
+    return () => {
+      this.authListeners.delete(callback);
+    };
+  }
+
+  private notifyAuthChange(loggedIn: boolean) {
+    this.authListeners.forEach(listener => {
+      try {
+        listener(loggedIn);
+      } catch {}
+    });
+  }
 
   onSessionExpired(callback: () => void): () => void {
     return ApiClient.onUnauthorized(async () => {
@@ -123,6 +141,8 @@ class AuthService {
       E2EEService.ensureRegisteredKeyPair().catch(error => {
         console.warn('[AuthService] E2EE key registration failed after login:', error);
       });
+
+      this.notifyAuthChange(true);
 
       return account;
     } catch (error: any) {
@@ -239,9 +259,18 @@ class AuthService {
   // Déconnexion
   async logout(): Promise<void> {
     try {
+      await OnlineStatusService.setOffline();
       await ApiClient.clearToken();
       this.currentUser = null;
       await AsyncStorage.removeItem('@current_user');
+      // Réglages propres au compte : ne pas les laisser au prochain utilisateur de l'appareil
+      await AsyncStorage.multiRemove([
+        '@privacy_settings',
+        '@privacy_settings_pending',
+        '@notification_message_setting_pending',
+        '@outbox',
+      ]);
+      this.notifyAuthChange(false);
     } catch (error) {
       console.error('Error logging out:', error);
       throw error;

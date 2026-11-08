@@ -15,6 +15,7 @@ import {
 import Modal from '../components/AppModal';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import ScreenHeader from '../components/ScreenHeader';
+import LoadingView from '../components/LoadingView';
 import {useTheme} from '../context/ThemeContext';
 import {Neutral, Spacing, Radius, Shadow, Typography, Semantic} from '../theme/designSystem';
 import StorageService from '../services/StorageService';
@@ -54,6 +55,7 @@ const CONFETTI_DATA = Array.from({length: CONFETTI_COUNT}, (_, i) => ({
 const BirthdaysScreen: React.FC<BirthdaysScreenProps> = ({navigation}) => {
   const {theme} = useTheme();
   const [birthdays, setBirthdays] = useState<BirthdayItem[]>([]);
+  const [loadingBirthdays, setLoadingBirthdays] = useState(true);
   const [messageModalVisible, setMessageModalVisible] = useState(false);
   const [selectedBirthday, setSelectedBirthday] = useState<BirthdayItem | null>(null);
   const [selectedMessageIndex, setSelectedMessageIndex] = useState(0);
@@ -182,6 +184,8 @@ const BirthdaysScreen: React.FC<BirthdaysScreenProps> = ({navigation}) => {
       setBirthdays(birthdayList);
     } catch (error) {
       console.error('Error loading birthdays:', error);
+    } finally {
+      setLoadingBirthdays(false);
     }
   };
 
@@ -370,7 +374,9 @@ const BirthdaysScreen: React.FC<BirthdaysScreenProps> = ({navigation}) => {
         onBack={() => navigation.goBack()}
       />
 
-      {birthdays.length === 0 ? (
+      {loadingBirthdays && birthdays.length === 0 ? (
+        <LoadingView label="Chargement des anniversaires…" />
+      ) : birthdays.length === 0 ? (
         <View style={styles(theme).emptyContainer}>
           <MaterialIcons name="cake" size={48} color={Neutral[300]} />
           <Text style={styles(theme).emptyText}>Aucun anniversaire</Text>

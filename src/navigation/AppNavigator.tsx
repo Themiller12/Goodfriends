@@ -1,7 +1,7 @@
 import React, {useEffect, useState, useCallback, useRef, forwardRef} from 'react';
 import {NavigationContainer} from '@react-navigation/native';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
-import {Alert, View} from 'react-native';
+import {Alert, View, AppState as RNAppState} from 'react-native';
 import NavPill from '../components/NavPill';
 import AuthService from '../services/AuthService';
 import OnlineStatusService from '../services/OnlineStatusService';
@@ -117,13 +117,31 @@ const AppNavigator = forwardRef<any, {onReady?: () => void}>((props, ref) => {
     return unsubscribe;
   }, [handleSessionExpired]);
 
+  // Après une connexion ou déconnexion sans redémarrage : présence en ligne et vérification de session
+  useEffect(() => AuthService.onAuthChange(setIsLoggedIn), []);
+
+  // Présence : actif uniquement quand l'application est au premier plan
   useEffect(() => {
-    if (isLoggedIn) {
-      OnlineStatusService.startHeartbeat();
-      hasShownSessionAlertRef.current = false;
-    } else {
+    if (!isLoggedIn) {
       OnlineStatusService.stopHeartbeat();
+      return;
     }
+    hasShownSessionAlertRef.current = false;
+    if (RNAppState.currentState === 'active') {
+      OnlineStatusService.startHeartbeat();
+    }
+    const subscription = RNAppState.addEventListener('change', nextState => {
+      if (nextState === 'active') {
+        OnlineStatusService.startHeartbeat();
+      } else {
+        OnlineStatusService.stopHeartbeat();
+        OnlineStatusService.setOffline();
+      }
+    });
+    return () => {
+      subscription.remove();
+      OnlineStatusService.stopHeartbeat();
+    };
   }, [isLoggedIn]);
 
   useEffect(() => {
@@ -155,7 +173,14 @@ const AppNavigator = forwardRef<any, {onReady?: () => void}>((props, ref) => {
 
   return (
     <View style={{flex: 1}}>
-    <NavigationContainer ref={ref} onReady={props.onReady} onStateChange={handleStateChange}>
+    <NavigationContainer
+      ref={ref}
+      onReady={() => {
+        // Démarrage à froid : aucun changement d'état n'est émis, on lit donc l'écran actif ici pour afficher le menu
+        setActiveRoute(getActiveRouteName((ref as React.RefObject<any>)?.current?.getRootState?.()));
+        props.onReady?.();
+      }}
+      onStateChange={handleStateChange}>
       <Stack.Navigator
         initialRouteName={isLoggedIn ? 'Home' : 'Login'}
         screenOptions={() => ({

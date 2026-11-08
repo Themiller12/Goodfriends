@@ -24,6 +24,7 @@ import {Contact, FamilyMemberInfo, NoteEntry, RelationType} from '../types';
 import StorageService from '../services/StorageService';
 import CacheService from '../services/CacheService';
 import FriendRequestService from '../services/FriendRequestService';
+import LoadingView from '../components/LoadingView';
 import {useTheme} from '../context/ThemeContext';
 import {Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
 
@@ -413,6 +414,15 @@ const ContactProfileScreen: React.FC<Props> = ({navigation, route}) => {
     return (
       <View style={[s.root, {alignItems: 'center', justifyContent: 'center'}]}>
         <Text style={{color: '#65655c'}}>Chargement…</Text>
+      </View>
+    );
+  }
+
+  if (loading && !contact) {
+    return (
+      <View style={s.root}>
+        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+        <LoadingView label="Chargement du contact…" />
       </View>
     );
   }

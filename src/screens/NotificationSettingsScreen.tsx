@@ -29,9 +29,15 @@ const NotificationSettingsScreen: React.FC<NotificationSettingsScreenProps> = ({
   }, []);
 
   const loadNotificationSettings = async () => {
-    const settings = await NotificationService.getSettings();
-    setBirthdayNotificationsEnabled(settings.birthdayNotificationsEnabled);
-    setMessageNotificationsEnabled(settings.messageNotificationsEnabled);
+    const applySettings = async () => {
+      const settings = await NotificationService.getSettings();
+      setBirthdayNotificationsEnabled(settings.birthdayNotificationsEnabled);
+      setMessageNotificationsEnabled(settings.messageNotificationsEnabled);
+    };
+    await applySettings();
+    // Puis aligner avec le serveur, qui applique aussi ce réglage
+    await NotificationService.syncMessageSettingWithServer();
+    await applySettings();
   };
 
   const handleToggleBirthdayNotifications = async (value: boolean) => {

@@ -24,6 +24,8 @@ import {Contact, ContactGroup, Child, ProfessionStudy, FamilyMemberInfo, Relatio
 import ContactService from '../services/ContactService';
 import StorageService from '../services/StorageService';
 import CacheService from '../services/CacheService';
+import NotificationService from '../services/NotificationService';
+import LoadingView from '../components/LoadingView';
 import RelationsEditor, {RelationsValue} from '../components/RelationsEditor';
 
 interface ContactDetailScreenProps {
@@ -52,6 +54,7 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
   const [groups, setGroups] = useState<ContactGroup[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [loadingContact, setLoadingContact] = useState(true);
   const [allContacts, setAllContacts] = useState<Contact[]>([]);
   const [photoUri, setPhotoUri] = useState<string | undefined>(undefined);
   const [children, setChildren] = useState<Child[]>([]);
@@ -68,6 +71,102 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
   const [editingProfId, setEditingProfId] = useState<string | null>(null);
   const [saveSuccessVisible, setSaveSuccessVisible] = useState(false);
   const toastAnim = useRef(new Animated.Value(-120)).current;
+
+  // ── Détection des modifications non enregistrées ──────────────────────────
+  // Instantané du formulaire à l'ouverture ; toute différence = modifications en attente
+  const [baseline, setBaseline] = useState<string | null>(null);
+  const needBaselineRef = useRef(false);
+  const bypassLeaveRef = useRef(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const saveButtonRef = useRef<View>(null);
+  const scrollYRef = useRef(0);
+  const viewportHeightRef = useRef(0);
+  const saveLayoutRef = useRef<{y: number; height: number} | null>(null);
+  const [saveButtonVisible, setSaveButtonVisible] = useState(false);
+
+  const currentSnapshot = JSON.stringify({
+    firstName, lastName, email, phone,
+    dateOfBirth: dateOfBirth ? new Date(dateOfBirth).toISOString() : null,
+    notes, gender, allergies, travels, selectedGroupId, photoUri,
+    children, professionsStudies, familyMembers,
+    relationships: contact?.relationships ?? [],
+  });
+  const isDirty = baseline !== null && baseline !== currentSnapshot;
+  const isDirtyRef = useRef(false);
+  isDirtyRef.current = isDirty;
+
+  // Le formulaire vient d'être rempli depuis le serveur : c'est l'état de référence
+  useEffect(() => {
+    if (needBaselineRef.current) {
+      needBaselineRef.current = false;
+      setBaseline(currentSnapshot);
+    }
+  });
+
+  const updateSaveButtonVisibility = () => {
+    const layout = saveLayoutRef.current;
+    if (!layout) {
+      setSaveButtonVisible(false);
+      return;
+    }
+    const top = scrollYRef.current;
+    const bottom = top + viewportHeightRef.current;
+    setSaveButtonVisible(layout.y >= top && layout.y + layout.height <= bottom);
+  };
+
+  const measureSaveButton = () => {
+    const inner = (scrollRef.current as any)?.getInnerViewRef?.();
+    if (!saveButtonRef.current || !inner) return;
+    saveButtonRef.current.measureLayout(
+      inner as any,
+      (_x, y, _w, height) => {
+        saveLayoutRef.current = {y, height};
+        updateSaveButtonVisibility();
+      },
+      () => {},
+    );
+  };
+
+  const scrollToSaveButton = () => {
+    const layout = saveLayoutRef.current;
+    if (!layout) return;
+    const target = layout.y + layout.height - viewportHeightRef.current + 24;
+    scrollRef.current?.scrollTo({y: Math.max(0, target), animated: true});
+  };
+
+  useEffect(() => {
+    if (isDirty) {
+      measureSaveButton();
+    }
+  }, [isDirty, currentSnapshot]);
+
+  // Quitter l'écran avec des modifications non enregistrées : demander confirmation
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (e: any) => {
+      if (bypassLeaveRef.current || !isDirtyRef.current) {
+        return;
+      }
+      e.preventDefault();
+      Alert.alert(
+        'Modifications non enregistrées',
+        'Vous avez des modifications qui ne sont pas encore enregistrées.',
+        [
+          {text: 'Continuer la modification', style: 'cancel'},
+          {
+            text: 'Abandonner',
+            style: 'destructive',
+            onPress: () => {
+              bypassLeaveRef.current = true;
+              navigation.dispatch(e.data.action);
+            },
+          },
+          {text: 'Enregistrer', onPress: () => handleSaveRef.current()},
+        ],
+      );
+    });
+    return unsubscribe;
+  }, [navigation]);
+  const handleSaveRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (saveSuccessVisible) {
@@ -92,9 +191,11 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
     loadContact();
     loadGroups();
     
-    // Recharger le contact quand l'écran redevient actif
+    // Recharger le contact quand l'écran redevient actif (sauf si des modifications sont en cours)
     const unsubscribe = navigation.addListener('focus', () => {
-      loadContact();
+      if (!isDirtyRef.current) {
+        loadContact();
+      }
     });
     
     // Gérer le bouton retour Android
@@ -110,6 +211,14 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
   }, [navigation]);
 
   const loadContact = async () => {
+    try {
+      await loadContactInner();
+    } finally {
+      setLoadingContact(false);
+    }
+  };
+
+  const loadContactInner = async () => {
     const contacts = await StorageService.getContacts();
     const foundContact = contacts.find(c => c.id === contactId);
     
@@ -139,6 +248,7 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
       setProfessionsStudies(foundContact.professionsStudies || []);
       setFamilyMembers(foundContact.familyMembers || []);
       setAllContacts(contacts);
+      needBaselineRef.current = true;
     }
   };
 
@@ -452,7 +562,11 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
 
       // Invalider le cache pour forcer une synchronisation avec l'API
       await CacheService.invalidateCache('contacts');
-      
+
+      // Les dates d'anniversaire (contact ou enfants) ont pu changer : replanifier les rappels
+      NotificationService.scheduleAllBirthdayNotifications().catch(() => {});
+
+      bypassLeaveRef.current = true;
       navigation.goBack();
     } catch (error: any) {
       Alert.alert('Erreur', error.message);
@@ -460,6 +574,7 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
       setLoading(false);
     }
   };
+  handleSaveRef.current = handleSave;
 
   const handleDelete = () => {
     Alert.alert(
@@ -472,6 +587,10 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
           style: 'destructive',
           onPress: async () => {
             await StorageService.deleteContact(contactId);
+            bypassLeaveRef.current = true;
+            // Annuler les rappels d'anniversaire du contact et de ses enfants
+            NotificationService.cancelBirthdayNotificationsForContact(contactId);
+            children.forEach(child => NotificationService.cancelBirthdayNotificationsForChild(child.id));
             Alert.alert('Succès', 'Contact supprimé', [
               {text: 'OK', onPress: () => navigation.goBack()},
             ]);
@@ -536,7 +655,13 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
 
   return (
     <View style={{flex: 1}}>
-    <ScrollView style={styles(theme).container}>
+    <ScrollView
+      ref={scrollRef}
+      style={styles(theme).container}
+      scrollEventThrottle={100}
+      onLayout={e => { viewportHeightRef.current = e.nativeEvent.layout.height; updateSaveButtonVisibility(); }}
+      onContentSizeChange={() => { if (isDirtyRef.current) measureSaveButton(); }}
+      onScroll={e => { scrollYRef.current = e.nativeEvent.contentOffset.y; updateSaveButtonVisibility(); }}>
       {photoUri ? (
         <View style={styles(theme).photoHeader}>
           <Image 
@@ -873,7 +998,7 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
           )}
         </TouchableOpacity>
 
-        <View style={styles(theme).buttonContainer}>
+        <View ref={saveButtonRef} collapsable={false} style={styles(theme).buttonContainer}>
           <TouchableOpacity
             style={[styles(theme).button, styles(theme).saveButton, loading && styles(theme).buttonDisabled]}
             onPress={handleSave}
@@ -1033,6 +1158,21 @@ const ContactDetailScreen: React.FC<ContactDetailScreenProps> = ({
       </Modal>
 
     </ScrollView>
+
+    {(loadingContact || loading) && (
+      <LoadingView overlay label={loading ? 'Enregistrement…' : 'Chargement du contact…'} />
+    )}
+
+    {isDirty && !saveButtonVisible && !loading && (
+      <TouchableOpacity
+        style={styles(theme).unsavedBanner}
+        activeOpacity={0.9}
+        onPress={scrollToSaveButton}>
+        <MaterialIcons name="edit" size={18} color="#fff" />
+        <Text style={styles(theme).unsavedBannerText}>Modifications non enregistrées</Text>
+        <Text style={styles(theme).unsavedBannerAction}>Enregistrer ↓</Text>
+      </TouchableOpacity>
+    )}
 
     {saveSuccessVisible && (
       <Animated.View
@@ -1790,6 +1930,36 @@ const styles = (theme: any) => StyleSheet.create({
     color: '#666',
     fontSize: 16,
     fontWeight: '600',
+  },
+  unsavedBanner: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 16,
+    zIndex: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e65100',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 3},
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+  },
+  unsavedBannerText: {
+    flex: 1,
+    marginLeft: 8,
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  unsavedBannerAction: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
   },
   successToastOverlay: {
     position: 'absolute',

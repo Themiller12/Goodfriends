@@ -18,6 +18,13 @@ if ($method === 'POST') {
     
     $token = $data['token'];
     $platform = $data['platform'] ?? 'android';
+
+    // Un appareil ne doit notifier qu'un seul compte : retirer ce token des autres comptes
+    // (changement de compte sur le même téléphone, déconnexion sans réseau, etc.)
+    $cleanStmt = $db->prepare("DELETE FROM user_fcm_tokens WHERE token = :token AND user_id <> :user_id");
+    $cleanStmt->bindParam(':token', $token);
+    $cleanStmt->bindParam(':user_id', $userId);
+    $cleanStmt->execute();
     
     // Vérifier si le token existe déjà pour cet utilisateur
     $checkQuery = "SELECT id FROM user_fcm_tokens WHERE user_id = :user_id AND platform = :platform";

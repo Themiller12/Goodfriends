@@ -15,6 +15,7 @@ import ApiClient from '../services/ApiClient';
 import API_CONFIG from '../config/api';
 
 const STORAGE_KEY = '@privacy_settings';
+const PENDING_KEY = '@privacy_settings_pending';
 
 interface PrivacySettings {
   isProfilePublic: boolean;
@@ -56,6 +57,14 @@ const PrivacySettingsScreen: React.FC<PrivacySettingsScreenProps> = ({navigation
     // 2. Synchroniser depuis l'API en arrière-plan
     setSyncing(true);
     try {
+      // Modification faite hors ligne : l'envoyer avant de relire le serveur, sinon elle serait écrasée
+      if (await AsyncStorage.getItem(PENDING_KEY)) {
+        const cached = await AsyncStorage.getItem(STORAGE_KEY);
+        if (cached) {
+          await ApiClient.put(API_CONFIG.ENDPOINTS.PRIVACY, {...DEFAULT_SETTINGS, ...JSON.parse(cached)});
+          await AsyncStorage.removeItem(PENDING_KEY);
+        }
+      }
       const res: any = await ApiClient.get(API_CONFIG.ENDPOINTS.PRIVACY);
       if (res?.success && res.data) {
         const remote: PrivacySettings = {
@@ -82,10 +91,12 @@ const PrivacySettingsScreen: React.FC<PrivacySettingsScreenProps> = ({navigation
     setSaving(true);
     try {
       await ApiClient.put(API_CONFIG.ENDPOINTS.PRIVACY, newSettings);
+      await AsyncStorage.removeItem(PENDING_KEY);
     } catch {
+      await AsyncStorage.setItem(PENDING_KEY, '1');
       Alert.alert(
         'Hors ligne',
-        'Les préférences ont été sauvegardées localement et seront synchronisées à la prochaine connexion.',
+        'Les préférences ont été sauvegardées localement et seront synchronisées à la prochaine ouverture de cet écran.',
       );
     } finally {
       setSaving(false);
@@ -211,7 +222,8 @@ const PrivacySettingsScreen: React.FC<PrivacySettingsScreenProps> = ({navigation
         <Text style={styles(theme).infoIcon}>ℹ️</Text>
         <Text style={styles(theme).infoText}>
           Ces paramètres sont synchronisés avec le serveur et pris en compte
-          immédiatement lors des recherches d'autres utilisateurs.
+          immédiatement : recherches d'autres utilisateurs, partage de votre
+          téléphone / email et statut en ligne (visible uniquement par vos amis).
         </Text>
       </View>
     </ScrollView>

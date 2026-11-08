@@ -30,7 +30,13 @@ class FCMService {
     /**
      * Obtenir un access token OAuth 2.0 via le compte de service Firebase
      */
+    private $cachedAccessToken = null;
+
     private function getAccessToken(): string {
+        // Un seul échange OAuth par requête (utile pour les envois à plusieurs membres d'un groupe)
+        if ($this->cachedAccessToken !== null) {
+            return $this->cachedAccessToken;
+        }
         $serviceAccount = json_decode(file_get_contents($this->serviceAccountPath), true);
 
         $now = time();
@@ -69,7 +75,7 @@ class FCMService {
             throw new Exception('[FCMService] Impossible d\'obtenir l\'access token');
         }
 
-        return $result['access_token'];
+        return $this->cachedAccessToken = $result['access_token'];
     }
 
     /**
@@ -81,7 +87,7 @@ class FCMService {
      * @param array  $data  Données supplémentaires (toutes les valeurs doivent être des strings)
      * @return bool
      */
-    public function sendNotification($token, $title, $body, $data = [], $tag = null) {
+    public function sendNotification($token, $title, $body, $data = [], $tag = null, $dataOnly = false) {
         if (!file_exists($this->serviceAccountPath)) {
             error_log('[FCMService] Envoi annulé : fichier de compte de service manquant');
             return false;
@@ -136,6 +142,12 @@ class FCMService {
             ],
         ];
 
+        if ($dataOnly) {
+            // Message de données seul : l'appareil déchiffre le contenu et affiche lui-même la notification
+            unset($message['message']['notification'], $message['message']['apns']);
+            $message['message']['android'] = ['priority' => 'high'];
+        }
+
         $headers = [
             'Authorization: Bearer ' . $accessToken,
             'Content-Type: application/json',
@@ -148,15 +160,6 @@ class FCMService {
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($message));
-
-        $result   = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-
-        if (curl_errno($ch)) {
-            error_log('[FCMService] cURL error: ' . curl_error($ch));
-            curl_close($ch);
-            return false;
-        }
 
         $result   = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -202,7 +205,17 @@ class FCMService {
      * @return string|null
      */
     public function getUserToken($db, $userId) {
-        $query = "SELECT token FROM user_fcm_tokens
+        $info = $this->getUserTokenInfo($db, $userId);
+        return $info ? $info['token'] : null;
+    }
+
+    /**
+     * Récupérer le token FCM le plus récent d'un utilisateur avec sa plateforme
+     *
+     * @return array|null ['token' => string, 'platform' => string]
+     */
+    public function getUserTokenInfo($db, $userId) {
+        $query = "SELECT token, platform FROM user_fcm_tokens
                   WHERE user_id = :user_id
                   ORDER BY updated_at DESC
                   LIMIT 1";
@@ -211,31 +224,55 @@ class FCMService {
         $stmt->execute();
 
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        return $row ? $row['token'] : null;
+        return $row ?: null;
+    }
+
+    /**
+     * Le destinataire a-t-il activé les notifications de messages (messages, réactions, groupes) ?
+     * En cas d'erreur (ex. migration non appliquée), on notifie par défaut.
+     */
+    public function isMessageNotificationEnabled($db, $userId) {
+        try {
+            $stmt = $db->prepare("SELECT notify_messages FROM user_profiles WHERE user_id = :user_id");
+            $stmt->bindParam(':user_id', $userId);
+            $stmt->execute();
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            return $row ? (int) $row['notify_messages'] === 1 : true;
+        } catch (Exception $e) {
+            return true;
+        }
     }
 
     /**
      * Envoyer une notification de nouveau message
      *
-     * @param PDO    $db              Connexion database
-     * @param string $recipientUserId ID du destinataire
-     * @param string $senderId        ID de l'expéditeur
-     * @param string $senderName      Nom de l'expéditeur
-     * @param string $messagePreview  Aperçu du message
-     * @param string $conversationId  ID de la conversation
+     * @param PDO    $db               Connexion database
+     * @param string $recipientUserId  ID du destinataire
+     * @param string $senderId         ID de l'expéditeur
+     * @param string $senderName       Nom de l'expéditeur
+     * @param string $messagePreview   Aperçu du message (en clair, vide si le message est chiffré)
+     * @param string $conversationId   ID de la conversation
+     * @param array|null $encrypted    Message chiffré de bout en bout : receiverCiphertext, receiverNonce,
+     *                                 receiverEphemeralPublicKey, messageId, hasPhoto. Le serveur ne pouvant pas
+     *                                 le lire, l'appareil le déchiffre et affiche lui-même la notification.
      * @return bool
      */
-    public function sendMessageNotification($db, $recipientUserId, $senderId, $senderFirstName, $senderLastName, $senderName, $messagePreview, $conversationId) {
-        $token = $this->getUserToken($db, $recipientUserId);
+    public function sendMessageNotification($db, $recipientUserId, $senderId, $senderFirstName, $senderLastName, $senderName, $messagePreview, $conversationId, $encrypted = null, $messageId = null) {
+        $tokenInfo = $this->getUserTokenInfo($db, $recipientUserId);
 
-        if (!$token) {
+        if (!$tokenInfo) {
             error_log("[FCMService] Aucun token FCM pour l'utilisateur: $recipientUserId");
             return false;
         }
 
+        if (!$this->isMessageNotificationEnabled($db, $recipientUserId)) {
+            return true;
+        }
+        $token = $tokenInfo['token'];
+
         // Compter les messages non lus de cet expéditeur et récupérer les aperçus
         $unreadStmt = $db->prepare(
-            "SELECT message, photo_url, attachment_type, created_at
+            "SELECT message, photo_url, attachment_type, is_encrypted, created_at
              FROM messages
              WHERE sender_id = :sender_id AND receiver_id = :recipient_id AND is_read = FALSE
              ORDER BY created_at ASC"
@@ -247,25 +284,6 @@ class FCMService {
 
         $unreadCount = count($unreadRows);
 
-        if ($unreadCount <= 1) {
-            $title = "Nouveau message de $senderName";
-            $body  = substr($messagePreview, 0, 100);
-        } else {
-            $title = "$senderName ($unreadCount nouveaux messages)";
-            // Construire un aperçu des derniers messages (max 3)
-            $previews = [];
-            foreach (array_slice($unreadRows, -3) as $row) {
-                $text = !empty($row['message']) ? $row['message'] : '📷 Photo';
-                if ($row['attachment_type'] === 'voice') {
-                    $text = '🎤 Message vocal';
-                } elseif ($row['attachment_type'] === 'file') {
-                    $text = '📎 Fichier';
-                }
-                $previews[] = substr($text, 0, 60);
-            }
-            $body = implode("\n", $previews);
-        }
-
         $data = [
             'type'            => 'message',
             'conversationId'  => $conversationId,
@@ -273,14 +291,101 @@ class FCMService {
             'senderName'      => $senderName,
             'senderFirstName' => $senderFirstName,
             'senderLastName'  => $senderLastName,
+            'recipientId'     => (string) $recipientUserId,
+            'messageId'       => (string) ($messageId ?? ''),
             'unreadCount'     => (string) max(1, $unreadCount),
         ];
+
+        // Limite FCM de 4 Ko pour les données : au-delà, on retombe sur une notification générique
+        $canDeliverEncrypted = $encrypted !== null
+            && ($tokenInfo['platform'] ?? 'android') === 'android'
+            && strlen($encrypted['receiverCiphertext'] . $encrypted['receiverNonce'] . $encrypted['receiverEphemeralPublicKey']) <= 2500;
+
+        if ($canDeliverEncrypted) {
+            $data += [
+                'encrypted'          => '1',
+                'hasPhoto'           => !empty($encrypted['hasPhoto']) ? '1' : '0',
+                'ciphertext'         => $encrypted['receiverCiphertext'],
+                'nonce'              => $encrypted['receiverNonce'],
+                'ephemeralPublicKey' => $encrypted['receiverEphemeralPublicKey'],
+            ];
+            $result = $this->sendNotification($token, '', '', $data, 'msg_' . $conversationId, true);
+            if ($result === 'token_invalid') {
+                $this->deleteInvalidToken($db, $token);
+            }
+            return $result === 'ok';
+        }
+
+        if ($encrypted !== null) {
+            $messagePreview = !empty($encrypted['hasPhoto']) ? '📷 Photo' : 'Nouveau message';
+        }
+
+        if ($unreadCount <= 1) {
+            $title = "Nouveau message de $senderName";
+            $body  = mb_substr($messagePreview, 0, 100);
+        } else {
+            $title = "$senderName ($unreadCount nouveaux messages)";
+            // Construire un aperçu des derniers messages (max 3)
+            $previews = [];
+            foreach (array_slice($unreadRows, -3) as $row) {
+                $text = !empty($row['message']) ? $row['message'] : '📷 Photo';
+                if ((int) ($row['is_encrypted'] ?? 0) === 1) {
+                    $text = !empty($row['photo_url']) ? '📷 Photo' : 'Nouveau message';
+                }
+                if ($row['attachment_type'] === 'voice') {
+                    $text = '🎤 Message vocal';
+                } elseif ($row['attachment_type'] === 'file') {
+                    $text = '📎 Fichier';
+                }
+                $previews[] = mb_substr($text, 0, 60);
+            }
+            $body = implode("\n", $previews);
+        }
 
         $result = $this->sendNotification($token, $title, $body, $data, 'msg_' . $conversationId);
         if ($result === 'token_invalid') {
             $this->deleteInvalidToken($db, $token);
         }
         return $result === 'ok';
+    }
+
+    /**
+     * Envoyer une notification de nouveau message de groupe à tous les membres sauf l'expéditeur
+     * (même canal, même réglage "Notifications de messages" et même mécanique que les messages privés).
+     */
+    public function sendGroupMessageNotification($db, $groupId, $groupName, $senderId, $senderName, $messagePreview, $messageId = null) {
+        $stmt = $db->prepare("SELECT user_id FROM group_chat_members WHERE group_id = :gid AND user_id <> :sid");
+        $stmt->execute([':gid' => $groupId, ':sid' => $senderId]);
+        $memberIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+        $title = $groupName !== '' ? $groupName : 'Nouveau message de groupe';
+        $body  = mb_substr(($senderName !== '' ? $senderName . ' : ' : '') . $messagePreview, 0, 120);
+
+        foreach ($memberIds as $memberId) {
+            try {
+                if (!$this->isMessageNotificationEnabled($db, $memberId)) {
+                    continue;
+                }
+                $token = $this->getUserToken($db, $memberId);
+                if (!$token) {
+                    continue;
+                }
+                $result = $this->sendNotification($token, $title, $body, [
+                    'type'        => 'group_message',
+                    'groupId'     => (string) $groupId,
+                    'groupName'   => (string) $groupName,
+                    'senderId'    => (string) $senderId,
+                    'senderName'  => (string) $senderName,
+                    'recipientId' => (string) $memberId,
+                    'messageId'   => (string) ($messageId ?? ''),
+                ], 'group_' . $groupId);
+                if ($result === 'token_invalid') {
+                    $this->deleteInvalidToken($db, $token);
+                }
+            } catch (Exception $e) {
+                error_log('[FCMService] Notification de groupe : ' . $e->getMessage());
+            }
+        }
     }
 
     /**

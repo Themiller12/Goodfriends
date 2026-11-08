@@ -1,6 +1,7 @@
 <?php
 require_once 'config.php';
 require_once 'FCMService.php';
+require_once 'attachment_rules.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -17,31 +18,6 @@ function signPhotoAccess($messageId, $expires) {
 function signAttachmentAccess($messageId, $expires) {
     return hash_hmac('sha256', 'attachment|' . $messageId . '|' . $expires, getJwtSecret());
 }
-
-const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
-const VOICE_MAX_DURATION_MS = 600000;
-
-// Extensions autorisées pour les fichiers joints ; le type MIME est déduit de l'extension, jamais du client
-const ATTACHMENT_EXTENSIONS = [
-    'pdf' => 'application/pdf',
-    'txt' => 'text/plain',
-    'csv' => 'text/csv',
-    'rtf' => 'application/rtf',
-    'doc' => 'application/msword',
-    'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'xls' => 'application/vnd.ms-excel',
-    'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'ppt' => 'application/vnd.ms-powerpoint',
-    'pptx' => 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    'odt' => 'application/vnd.oasis.opendocument.text',
-    'ods' => 'application/vnd.oasis.opendocument.spreadsheet',
-    'odp' => 'application/vnd.oasis.opendocument.presentation',
-    'zip' => 'application/zip',
-    'mp3' => 'audio/mpeg',
-    'm4a' => 'audio/mp4',
-    'wav' => 'audio/wav',
-    'mp4' => 'video/mp4',
-];
 
 // Un lien signé temporaire (photo-link / attachment-link) remplace le jeton pour télécharger un média
 $signedMediaRequest = $method === 'GET' && in_array($action, ['photo', 'attachment'], true) && isset($_GET['exp'], $_GET['sig']);
@@ -208,47 +184,7 @@ try {
                     sendResponse(false, 'Fichier introuvable', null, 404);
                 }
 
-                $decrypted = decryptAtRest(file_get_contents($attFile));
-                $separator = $decrypted === false ? false : strpos($decrypted, "\n");
-                if ($separator === false) {
-                    error_log('[API] Pièce jointe illisible ou altérée : ' . $attachmentId);
-                    sendResponse(false, 'Fichier introuvable', null, 404);
-                }
-                $attMime = substr($decrypted, 0, $separator);
-                $body = substr($decrypted, $separator + 1);
-                $total = strlen($body);
-                $start = 0;
-                $end = $total - 1;
-
-                // Lecture partielle (nécessaire au lecteur audio d'Android)
-                if (isset($_SERVER['HTTP_RANGE']) && preg_match('/^bytes=(\d*)-(\d*)$/', $_SERVER['HTTP_RANGE'], $range)) {
-                    if ($range[1] !== '') {
-                        $start = (int)$range[1];
-                        if ($range[2] !== '') {
-                            $end = min((int)$range[2], $total - 1);
-                        }
-                    } elseif ($range[2] !== '') {
-                        $start = max(0, $total - (int)$range[2]);
-                    }
-                    if ($start > $end || $start >= $total) {
-                        http_response_code(416);
-                        header('Content-Range: bytes */' . $total);
-                        exit();
-                    }
-                    http_response_code(206);
-                    header('Content-Range: bytes ' . $start . '-' . $end . '/' . $total);
-                }
-
-                $isVoice = $attRow['attachment_type'] === 'voice';
-                $safeName = preg_replace('/[^A-Za-z0-9._-]+/', '_', (string)$attRow['attachment_name']);
-                header('Content-Type: ' . $attMime);
-                header('Content-Disposition: ' . ($isVoice ? 'inline' : 'attachment')
-                    . '; filename="' . $safeName . '"; filename*=UTF-8\'\'' . rawurlencode((string)$attRow['attachment_name']));
-                header('Accept-Ranges: bytes');
-                header('Content-Length: ' . ($end - $start + 1));
-                header('Cache-Control: private, max-age=86400');
-                echo substr($body, $start, $end - $start + 1);
-                exit();
+                streamAttachment($attFile, (string)$attRow['attachment_type'], (string)$attRow['attachment_name']);
             }
 
             if ($action === 'attachment-link') {
@@ -412,12 +348,36 @@ try {
                 $stmt->bindParam(':uid_m4', $userId);
                 $stmt->execute();
 
+                $lastEncryptedStmt = $db->prepare(
+                    "SELECT sender_id, sender_ciphertext, sender_nonce, sender_ephemeral_public_key,
+                            receiver_ciphertext, receiver_nonce, receiver_ephemeral_public_key
+                     FROM messages
+                     WHERE (sender_id = :me1 AND receiver_id = :other1) OR (sender_id = :other2 AND receiver_id = :me2)
+                     ORDER BY created_at DESC LIMIT 1"
+                );
+
                 $conversations = [];
                 while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
                     $lastMessage = $row['last_message'];
+                    $lastEncrypted = null;
+                    $lastHasPhoto = !empty($row['last_photo_url']);
                     if (isset($row['last_message_is_encrypted']) && (int)$row['last_message_is_encrypted'] === 1) {
                         $lastMessage = 'Message chiffré';
-                    } elseif (!empty($row['last_photo_url']) && empty($lastMessage)) {
+                        // Le serveur ne peut pas lire le message : l'appareil déchiffre l'aperçu avec sa clé
+                        $lastEncryptedStmt->execute([
+                            ':me1' => $userId, ':other1' => $row['other_user_id'],
+                            ':other2' => $row['other_user_id'], ':me2' => $userId,
+                        ]);
+                        $lastRow = $lastEncryptedStmt->fetch(PDO::FETCH_ASSOC);
+                        if ($lastRow) {
+                            $mine = $lastRow['sender_id'] === $userId ? 'sender' : 'receiver';
+                            $lastEncrypted = [
+                                'ciphertext' => $lastRow[$mine . '_ciphertext'],
+                                'nonce' => $lastRow[$mine . '_nonce'],
+                                'ephemeralPublicKey' => $lastRow[$mine . '_ephemeral_public_key'],
+                            ];
+                        }
+                    } elseif ($lastHasPhoto && empty($lastMessage)) {
                         $lastMessage = '📷 Photo';
                     }
 
@@ -428,6 +388,8 @@ try {
                         'otherUserLastName' => $row['other_user_last_name'],
                         'otherUserPhone' => $row['other_user_phone'],
                         'lastMessage' => $lastMessage,
+                        'lastMessageEncrypted' => $lastEncrypted,
+                        'lastMessageHasPhoto' => $lastHasPhoto,
                         'lastMessageTime' => $row['last_message_time'],
                         'unreadCount' => (int)$row['unread_count'],
                         'isMutual' => (bool)$row['is_mutual']
@@ -481,12 +443,56 @@ try {
                     sendResponse(false, 'publicKey invalide', null, 400);
                 }
 
-                $stmt = $db->prepare("UPDATE users SET e2ee_public_key = :key, updated_at = NOW() WHERE id = :id");
+                // Une clé sauvegardée (e2ee-backup) fait foi : un ancien client ne doit pas l'écraser
+                $stmt = $db->prepare("UPDATE users SET e2ee_public_key = :key, updated_at = NOW() WHERE id = :id AND e2ee_key_backup IS NULL");
                 $stmt->bindParam(':key', $publicKey);
                 $stmt->bindParam(':id', $userId);
                 $stmt->execute();
 
                 sendResponse(true, 'Clé E2EE enregistrée');
+            }
+
+            if ($action === 'e2ee-backup') {
+                // Sauvegarde de la clé E2EE liée au compte : la première clé enregistrée fait foi,
+                // les appareils suivants (réinstallation, nouveau téléphone) récupèrent la même paire.
+                $publicKey = isset($data['publicKey']) && is_string($data['publicKey']) ? trim($data['publicKey']) : '';
+                $secretKey = isset($data['secretKey']) && is_string($data['secretKey']) ? trim($data['secretKey']) : '';
+                $decodedPublic = base64_decode($publicKey, true);
+                $decodedSecret = base64_decode($secretKey, true);
+                if ($decodedPublic === false || strlen($decodedPublic) !== 32 || $decodedSecret === false || strlen($decodedSecret) !== 32) {
+                    sendResponse(false, 'Clé invalide', null, 400);
+                }
+                if (function_exists('sodium_crypto_box_publickey_from_secretkey')
+                    && !hash_equals(sodium_crypto_box_publickey_from_secretkey($decodedSecret), $decodedPublic)) {
+                    sendResponse(false, 'Clés incohérentes', null, 400);
+                }
+
+                $store = $db->prepare(
+                    "UPDATE users SET e2ee_key_backup = :backup, e2ee_public_key = :pub, updated_at = NOW()
+                     WHERE id = :id AND e2ee_key_backup IS NULL"
+                );
+                $store->execute([
+                    ':backup' => 'enc1:' . base64_encode(encryptAtRest(json_encode(['secretKey' => $secretKey]))),
+                    ':pub' => $publicKey,
+                    ':id' => $userId,
+                ]);
+
+                $stored = $db->prepare("SELECT e2ee_public_key, e2ee_key_backup FROM users WHERE id = :id");
+                $stored->execute([':id' => $userId]);
+                $storedRow = $stored->fetch(PDO::FETCH_ASSOC);
+                $backup = is_string($storedRow['e2ee_key_backup'] ?? null) && strpos($storedRow['e2ee_key_backup'], 'enc1:') === 0
+                    ? decryptAtRest(base64_decode(substr($storedRow['e2ee_key_backup'], 5)))
+                    : false;
+                $backupData = $backup === false ? null : json_decode($backup, true);
+                if (!is_array($backupData) || empty($backupData['secretKey']) || empty($storedRow['e2ee_public_key'])) {
+                    error_log('[API] Sauvegarde E2EE illisible pour l\'utilisateur ' . $userId);
+                    sendResponse(false, 'Sauvegarde de clé indisponible', null, 500);
+                }
+
+                sendResponse(true, 'Clé E2EE synchronisée', [
+                    'publicKey' => $storedRow['e2ee_public_key'],
+                    'secretKey' => $backupData['secretKey'],
+                ]);
             }
 
             if ($action === 'send') {
@@ -593,8 +599,16 @@ try {
                         $senderFirstName,
                         $senderLastName,
                         $senderName,
-                        $isEncrypted ? 'Message chiffré' : $message,
-                        $conversationId
+                        $isEncrypted ? '' : $message,
+                        $conversationId,
+                        $isEncrypted ? [
+                            'receiverCiphertext' => (string) $cipherForReceiver,
+                            'receiverNonce' => (string) $nonceForReceiver,
+                            'receiverEphemeralPublicKey' => (string) $ephemeralForReceiver,
+                            'messageId' => $messageId,
+                            'hasPhoto' => false,
+                        ] : null,
+                        $messageId
                     );
                 } catch (Exception $e) {
                     error_log('FCM notification error: ' . $e->getMessage());
@@ -733,8 +747,16 @@ try {
                         $senderFirstName,
                         $senderLastName,
                         $senderName,
-                        $isEncrypted ? '📷 Photo chiffrée' : '📷 Photo',
-                        $conversationId
+                        '📷 Photo',
+                        $conversationId,
+                        $isEncrypted ? [
+                            'receiverCiphertext' => (string) $cipherForReceiver,
+                            'receiverNonce' => (string) $nonceForReceiver,
+                            'receiverEphemeralPublicKey' => (string) $ephemeralForReceiver,
+                            'messageId' => $messageId,
+                            'hasPhoto' => true,
+                        ] : null,
+                        $messageId
                     );
                 } catch (Exception $e) {
                     error_log('FCM notification error: ' . $e->getMessage());
@@ -759,35 +781,7 @@ try {
                     sendResponse(false, 'Vous ne pouvez envoyer des messages qu\'aux amis.', null, 403);
                 }
 
-                $binary = base64_decode($data['data'], true);
-                if ($binary === false || strlen($binary) < 1) {
-                    sendResponse(false, 'Données invalides', null, 400);
-                }
-                if (strlen($binary) > ATTACHMENT_MAX_BYTES) {
-                    sendResponse(false, 'Fichier trop volumineux (max 5 Mo)', null, 413);
-                }
-
-                $durationMs = null;
-                if ($kind === 'voice') {
-                    // Enregistrement AAC dans un conteneur MP4 (.m4a)
-                    if (class_exists('finfo')
-                        && !in_array((new finfo(FILEINFO_MIME_TYPE))->buffer($binary), ['audio/mp4', 'video/mp4', 'audio/x-m4a', 'audio/aac', 'audio/mpeg'], true)) {
-                        sendResponse(false, 'Format audio non autorisé', null, 400);
-                    }
-                    $attachmentMime = 'audio/mp4';
-                    $attachmentName = 'Message vocal.m4a';
-                    $durationMs = max(0, min(VOICE_MAX_DURATION_MS, (int)($data['durationMs'] ?? 0)));
-                    $messageText = '🎤 Message vocal';
-                } else {
-                    $rawName = isset($data['fileName']) && is_string($data['fileName']) ? trim($data['fileName']) : '';
-                    $attachmentName = mb_substr(preg_replace('/[\x00-\x1F\x7F\\\\\/:*?"<>|]+/u', '_', $rawName), 0, 150);
-                    $extension = strtolower(pathinfo($attachmentName, PATHINFO_EXTENSION));
-                    if ($attachmentName === '' || !isset(ATTACHMENT_EXTENSIONS[$extension])) {
-                        sendResponse(false, 'Type de fichier non autorisé', null, 400);
-                    }
-                    $attachmentMime = ATTACHMENT_EXTENSIONS[$extension];
-                    $messageText = '📎 ' . $attachmentName;
-                }
+                [$binary, $attachmentMime, $attachmentName, $durationMs, $messageText] = parseAttachmentUpload($data, $kind);
 
                 $uploadDir = __DIR__ . '/uploads/messages/';
                 if (!is_dir($uploadDir)) {
@@ -859,7 +853,9 @@ try {
                         $senderLastName,
                         $senderName,
                         $kind === 'voice' ? '🎤 Message vocal' : '📎 Fichier',
-                        $conversationId
+                        $conversationId,
+                        null,
+                        $messageId
                     );
                 } catch (Exception $e) {
                     error_log('FCM notification error: ' . $e->getMessage());
@@ -925,9 +921,9 @@ try {
                         $reactorName = trim(($reactor['first_name'] ?? '') . ' ' . ($reactor['last_name'] ?? '')) ?: "Quelqu'un";
                         $fcm = new FCMService();
                         $token = $fcm->getUserToken($db, $msgRow['sender_id']);
-                        if ($token) {
+                        if ($token && $fcm->isMessageNotificationEnabled($db, $msgRow['sender_id'])) {
                             $preview = ((int)($msgRow['is_encrypted'] ?? 0) === 1)
-                                ? 'Message chiffré'
+                                ? ''
                                 : mb_substr($msgRow['message'] ?? '', 0, 50);
                             $fcm->sendNotification(
                                 $token,
@@ -960,9 +956,9 @@ try {
                     $reactorName = trim(($reactor['first_name'] ?? '') . ' ' . ($reactor['last_name'] ?? '')) ?: "Quelqu'un";
                     $fcm = new FCMService();
                     $token = $fcm->getUserToken($db, $msgRow['sender_id']);
-                    if ($token) {
+                    if ($token && $fcm->isMessageNotificationEnabled($db, $msgRow['sender_id'])) {
                         $preview = ((int)($msgRow['is_encrypted'] ?? 0) === 1)
-                            ? 'Message chiffré'
+                            ? ''
                             : mb_substr($msgRow['message'] ?? '', 0, 50);
                         $fcm->sendNotification(
                             $token,

@@ -1,4 +1,4 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+﻿import AsyncStorage from '@react-native-async-storage/async-storage';
 import nacl from 'tweetnacl';
 import * as naclUtil from 'tweetnacl-util';
 import ApiClient from './ApiClient';
@@ -24,8 +24,18 @@ type EncryptedPayload = {
   ephemeralPublicKey: string;
 };
 
+// Anciennes clés privées de ce compte (remplacées par la clé sauvegardée côté serveur) : gardées pour relire l'historique.
+const PREVIOUS_KEYS_NAME = 'e2ee_previous_secret_keys';
+const SYNC_RETRY_DELAY_MS = 15000;
+
+export type GroupPayload = EncryptedPayload & {userId: string};
+
 class E2EEService {
   private decodedKeyCache = new Map<string, Uint8Array>();
+  private session: {userId: string; keyPair: LocalKeyPair} | null = null;
+  private pending: {userId: string; promise: Promise<LocalKeyPair>} | null = null;
+  private lastFailure: {userId: string; at: number; error: unknown} | null = null;
+  private fallback: {userId: string; at: number; keyPair: LocalKeyPair} | null = null;
 
   private decodeKey(base64: string): Uint8Array {
     const cached = this.decodedKeyCache.get(base64);
@@ -56,43 +66,134 @@ class E2EEService {
   }
 
   private async saveLocalKeyPair(userId: string, keyPair: LocalKeyPair): Promise<void> {
-    await SecureStorage.setItem(SECRET_KEY_NAME, keyPair.secretKey);
+    try {
+      await SecureStorage.setItem(SECRET_KEY_NAME, keyPair.secretKey);
+    } catch {
+      // Keystore inutilisable sur certains appareils : la clé reste récupérable depuis le compte
+      await AsyncStorage.setItem(LEGACY_SECRET_KEY, keyPair.secretKey);
+    }
     await AsyncStorage.multiSet([
       [KEYS.PUBLIC_KEY, keyPair.publicKey],
       [KEYS.USER_ID, userId],
     ]);
   }
 
-  private async loadLocalKeyPair(): Promise<LocalKeyPair | null> {
-    const values = await AsyncStorage.multiGet([KEYS.PUBLIC_KEY, KEYS.USER_ID]);
-    const map = new Map(values);
+  private async readSecretKey(): Promise<string | null> {
+    try {
+      return await SecureStorage.getItem(SECRET_KEY_NAME, LEGACY_SECRET_KEY);
+    } catch {
+      return AsyncStorage.getItem(LEGACY_SECRET_KEY);
+    }
+  }
 
-    const publicKey = map.get(KEYS.PUBLIC_KEY) || null;
-    const secretKey = await SecureStorage.getItem(SECRET_KEY_NAME, LEGACY_SECRET_KEY);
-    const keyUserId = map.get(KEYS.USER_ID) || null;
-    const currentUserId = await this.getCurrentUserId();
+  private async loadLocalKeyPair(userId: string): Promise<LocalKeyPair | null> {
+    try {
+      const values = await AsyncStorage.multiGet([KEYS.PUBLIC_KEY, KEYS.USER_ID]);
+      const map = new Map(values);
 
-    if (!publicKey || !secretKey || keyUserId !== currentUserId) {
+      const publicKey = map.get(KEYS.PUBLIC_KEY) || null;
+      const secretKey = await this.readSecretKey();
+      const keyUserId = map.get(KEYS.USER_ID) || null;
+
+      if (!publicKey || !secretKey || keyUserId !== userId) {
+        return null;
+      }
+      return {publicKey, secretKey};
+    } catch {
       return null;
     }
+  }
 
-    return {publicKey, secretKey};
+  private async loadPreviousSecretKeys(): Promise<string[]> {
+    try {
+      const raw = await SecureStorage.getItem(PREVIOUS_KEYS_NAME);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter(k => typeof k === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async rememberPreviousSecretKey(secretKey: string): Promise<void> {
+    try {
+      const previous = await this.loadPreviousSecretKeys();
+      if (!previous.includes(secretKey)) {
+        await SecureStorage.setItem(PREVIOUS_KEYS_NAME, JSON.stringify([...previous, secretKey].slice(-5)));
+      }
+    } catch {}
+  }
+
+  // Envoie la paire locale (ou une nouvelle) au serveur : la première clé enregistrée pour le compte fait foi
+  // et est renvoyée à tous les appareils suivants (réinstallation, nouveau téléphone).
+  private async syncKeyPair(userId: string): Promise<LocalKeyPair> {
+    const local = await this.loadLocalKeyPair(userId);
+    const candidate = local ?? this.generateKeyPair();
+
+    let remote: LocalKeyPair;
+    try {
+      const response = await ApiClient.post('/messages.php?action=e2ee-backup', {
+        publicKey: candidate.publicKey,
+        secretKey: candidate.secretKey,
+      }) as any;
+      remote = {publicKey: response?.data?.publicKey, secretKey: response?.data?.secretKey};
+      const derived = nacl.box.keyPair.fromSecretKey(naclUtil.decodeBase64(remote.secretKey));
+      if (naclUtil.encodeBase64(derived.publicKey) !== remote.publicKey) {
+        throw new Error('Clé E2EE du compte invalide');
+      }
+    } catch (error) {
+      // Hors ligne : on garde la clé locale mais on ne fabrique jamais une nouvelle clé qui écraserait celle du compte
+      if (local) {
+        this.fallback = {userId, at: Date.now(), keyPair: local};
+        return local;
+      }
+      throw error;
+    }
+
+    if (!local || local.publicKey !== remote.publicKey) {
+      if (local) {
+        await this.rememberPreviousSecretKey(local.secretKey);
+      }
+      await this.saveLocalKeyPair(userId, remote);
+    }
+    this.session = {userId, keyPair: remote};
+    return remote;
   }
 
   async ensureRegisteredKeyPair(): Promise<LocalKeyPair> {
-    const currentUserId = await this.getCurrentUserId();
-    let keyPair = await this.loadLocalKeyPair();
-
-    if (!keyPair) {
-      keyPair = this.generateKeyPair();
-      await this.saveLocalKeyPair(currentUserId, keyPair);
+    const userId = await this.getCurrentUserId();
+    if (this.session?.userId === userId) {
+      return this.session.keyPair;
     }
+    if (this.fallback?.userId === userId && Date.now() - this.fallback.at < SYNC_RETRY_DELAY_MS) {
+      return this.fallback.keyPair;
+    }
+    if (this.lastFailure?.userId === userId && Date.now() - this.lastFailure.at < SYNC_RETRY_DELAY_MS) {
+      throw this.lastFailure.error;
+    }
+    if (this.pending?.userId !== userId) {
+      const promise = this.syncKeyPair(userId).then(
+        keyPair => {
+          this.lastFailure = null;
+          return keyPair;
+        },
+        error => {
+          this.lastFailure = {userId, at: Date.now(), error};
+          throw error;
+        },
+      ).finally(() => {
+        if (this.pending?.promise === promise) {
+          this.pending = null;
+        }
+      });
+      this.pending = {userId, promise};
+    }
+    return this.pending!.promise;
+  }
 
-    await ApiClient.post('/messages.php?action=e2ee-key', {
-      publicKey: keyPair.publicKey,
-    });
-
-    return keyPair;
+  private async getSecretKeyCandidates(): Promise<Uint8Array[]> {
+    const current = await this.ensureRegisteredKeyPair();
+    const previous = await this.loadPreviousSecretKeys();
+    return [current.secretKey, ...previous].map(key => this.decodeKey(key));
   }
 
   async getPublicKey(userId: string): Promise<string | null> {
@@ -144,6 +245,25 @@ class E2EEService {
     };
   }
 
+  private async openWithKeys(ciphertext: string, nonce: string, ephemeralPublicKey: string): Promise<string | null> {
+    try {
+      const secretKeys = await this.getSecretKeyCandidates();
+      const cipherBytes = naclUtil.decodeBase64(ciphertext);
+      const nonceBytes = naclUtil.decodeBase64(nonce);
+      const senderKey = naclUtil.decodeBase64(ephemeralPublicKey);
+
+      for (const secretKey of secretKeys) {
+        const opened = nacl.box.open(cipherBytes, nonceBytes, senderKey, secretKey);
+        if (opened) {
+          return naclUtil.encodeUTF8(opened);
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   async decryptMessage(args: {
     currentUserId: string;
     senderId: string;
@@ -155,12 +275,6 @@ class E2EEService {
     receiverNonce?: string | null;
     receiverEphemeralPublicKey?: string | null;
   }): Promise<string | null> {
-    const local = await this.loadLocalKeyPair();
-    if (!local) {
-      return null;
-    }
-
-    const mySecretKey = this.decodeKey(local.secretKey);
     const isSender = args.currentUserId === args.senderId;
 
     const ciphertext = isSender ? args.senderCiphertext : args.receiverCiphertext;
@@ -171,22 +285,47 @@ class E2EEService {
       return null;
     }
 
-    try {
-      const opened = nacl.box.open(
-        naclUtil.decodeBase64(ciphertext),
-        naclUtil.decodeBase64(nonce),
-        naclUtil.decodeBase64(ephemeralPublicKey),
-        mySecretKey,
-      );
+    return this.openWithKeys(ciphertext, nonce, ephemeralPublicKey);
+  }
 
-      if (!opened) {
-        return null;
-      }
+  // ── Groupes : une charge utile chiffrée par membre (même mécanique que les messages privés) ──
 
-      return naclUtil.encodeUTF8(opened);
-    } catch {
+  private async getGroupMemberKeys(groupId: string): Promise<{userId: string; publicKey: string}[]> {
+    const response = await ApiClient.get(`/group_chats.php?action=member-keys&id=${encodeURIComponent(groupId)}`) as any;
+    return Array.isArray(response?.data) ? response.data : [];
+  }
+
+  async buildGroupPayloads(groupId: string, plaintext: string): Promise<{
+    encryptionVersion: string;
+    payloads: GroupPayload[];
+  }> {
+    const [local, currentUserId, memberKeys] = await Promise.all([
+      this.ensureRegisteredKeyPair(),
+      this.getCurrentUserId(),
+      this.getGroupMemberKeys(groupId),
+    ]);
+
+    const keys = new Map<string, string>();
+    memberKeys.forEach(member => member.publicKey && keys.set(member.userId, member.publicKey));
+    keys.set(currentUserId, local.publicKey);
+
+    const payloads: GroupPayload[] = [];
+    keys.forEach((publicKey, userId) => {
+      payloads.push({userId, ...this.encryptFor(publicKey, plaintext)});
+    });
+
+    return {encryptionVersion: 'e2ee-v1', payloads};
+  }
+
+  async decryptPayload(payload: {
+    ciphertext?: string | null;
+    nonce?: string | null;
+    ephemeralPublicKey?: string | null;
+  }): Promise<string | null> {
+    if (!payload.ciphertext || !payload.nonce || !payload.ephemeralPublicKey) {
       return null;
     }
+    return this.openWithKeys(payload.ciphertext, payload.nonce, payload.ephemeralPublicKey);
   }
 }
 

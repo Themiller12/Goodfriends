@@ -29,6 +29,7 @@ export interface Message {
   attachmentSize?: number | null;
   attachmentDurationMs?: number | null;
   attachmentUrl?: string | null;
+  pending?: boolean; // en attente d'envoi (hors ligne)
   isRead: boolean;
   createdAt: string;
   senderEmail?: string;
@@ -54,6 +55,8 @@ export interface Conversation {
   otherUserLastName: string | null;
   otherUserPhone: string | null;
   lastMessage: string;
+  lastMessageEncrypted?: { ciphertext: string; nonce: string; ephemeralPublicKey: string } | null;
+  lastMessageHasPhoto?: boolean;
   lastMessageTime: string;
   unreadCount: number;
   isMutual: boolean;
@@ -98,6 +101,22 @@ class MessageService {
         ...message,
         message: decrypted ?? '[Message chiffré indisponible]'
       };
+    }));
+  }
+
+  // Aperçu du dernier message : le serveur ne peut pas lire un message chiffré, on le déchiffre ici
+  private async decryptConversations(conversations: Conversation[]): Promise<Conversation[]> {
+    return Promise.all(conversations.map(async conv => {
+      if (!conv.lastMessageEncrypted) return conv;
+
+      const {lastMessageEncrypted, ...rest} = conv;
+      const plain = await E2EEService.decryptPayload(lastMessageEncrypted);
+      if (plain === null) {
+        return rest;
+      }
+      const text = plain.trim();
+      const lastMessage = rest.lastMessageHasPhoto ? (text ? `📷 ${text}` : '📷 Photo') : text;
+      return {...rest, lastMessage};
     }));
   }
 
@@ -309,7 +328,7 @@ class MessageService {
       
       // Sinon, récupérer depuis l'API
       const response = await ApiClient.get('/messages.php?action=conversations') as any;
-      const conversations = response.data;
+      const conversations = await this.decryptConversations(response.data);
       
       // Mettre à jour le cache
       await CacheService.cacheConversations(conversations);
@@ -335,7 +354,7 @@ class MessageService {
   private async updateConversationsCache(): Promise<void> {
     try {
       const response = await ApiClient.get('/messages.php?action=conversations') as any;
-      await CacheService.cacheConversations(response.data);
+      await CacheService.cacheConversations(await this.decryptConversations(response.data));
       console.log('[MessageService] Background cache update completed');
     } catch (error) {
       console.error('[MessageService] Background cache update failed:', error);

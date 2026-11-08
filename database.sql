@@ -151,6 +151,8 @@ CREATE TABLE user_profiles (
     privacy_show_online         TINYINT(1) NOT NULL DEFAULT 1,
     privacy_allow_search_email  TINYINT(1) NOT NULL DEFAULT 1,
     privacy_allow_search_phone  TINYINT(1) NOT NULL DEFAULT 1,
+    -- Préférences de notification
+    notify_messages             TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,

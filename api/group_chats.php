@@ -1,6 +1,7 @@
 <?php
 require_once 'config.php';
 require_once 'FCMService.php';
+require_once 'attachment_rules.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -8,8 +9,15 @@ $db = $database->getConnection();
 $method = $_SERVER['REQUEST_METHOD'];
 $data = json_decode(file_get_contents('php://input'), true);
 
-$userId = verifyToken();
 $action = isset($_GET['action']) ? $_GET['action'] : '';
+
+function signGroupAttachmentAccess($messageId, $expires) {
+    return hash_hmac('sha256', 'groupattachment|' . $messageId . '|' . $expires, getJwtSecret());
+}
+
+// Un lien signé temporaire (attachment-link) remplace le jeton pour lire ou télécharger une pièce jointe
+$signedAttachmentRequest = $method === 'GET' && $action === 'attachment' && isset($_GET['exp'], $_GET['sig']);
+$userId = $signedAttachmentRequest ? null : verifyToken();
 
 const GROUP_MAX_MEMBERS = 50;
 const GROUP_MAX_TEXT_LENGTH = 5000;
@@ -33,11 +41,97 @@ function getUserDisplayName(PDO $db, $userId) {
     return trim(($row['first_name'] ?? '') . ' ' . ($row['last_name'] ?? ''));
 }
 
+function notifyGroupMembers(PDO $db, $groupId, $senderId, $senderName, $preview, $messageId) {
+    try {
+        $nameStmt = $db->prepare('SELECT name FROM group_chats WHERE id = :gid');
+        $nameStmt->execute([':gid' => $groupId]);
+        $groupName = (string) $nameStmt->fetchColumn();
+        $fcm = new FCMService();
+        $fcm->sendGroupMessageNotification($db, $groupId, $groupName, $senderId, $senderName, $preview, $messageId);
+    } catch (Exception $e) {
+        error_log('FCM group notification error: ' . $e->getMessage());
+    }
+}
+
 try {
     switch ($method) {
 
         // ── GET ──────────────────────────────────────────────────────────────────
         case 'GET':
+            if ($action === 'attachment') {
+                $attachmentId = isset($_GET['id']) ? (string)$_GET['id'] : '';
+                if (!preg_match('/^[a-zA-Z0-9]{10,64}$/', $attachmentId)) {
+                    sendResponse(false, 'Fichier introuvable', null, 404);
+                }
+
+                if ($signedAttachmentRequest) {
+                    $expires = (int)$_GET['exp'];
+                    if ($expires < time() || !hash_equals(signGroupAttachmentAccess($attachmentId, $expires), (string)$_GET['sig'])) {
+                        sendResponse(false, 'Lien expiré', null, 403);
+                    }
+                    $attStmt = $db->prepare(
+                        "SELECT attachment_type, attachment_name FROM group_chat_messages
+                         WHERE id = :id AND attachment_type IS NOT NULL"
+                    );
+                    $attStmt->execute([':id' => $attachmentId]);
+                } else {
+                    // Membres du groupe uniquement
+                    $attStmt = $db->prepare(
+                        "SELECT m.attachment_type, m.attachment_name FROM group_chat_messages m
+                         INNER JOIN group_chat_members gcm ON gcm.group_id = m.group_id
+                         WHERE m.id = :id AND m.attachment_type IS NOT NULL AND gcm.user_id = :uid"
+                    );
+                    $attStmt->execute([':id' => $attachmentId, ':uid' => $userId]);
+                }
+                $attRow = $attStmt->fetch(PDO::FETCH_ASSOC);
+                $attFile = __DIR__ . '/uploads/group/' . $attachmentId . '.att.enc';
+                if (!$attRow || !is_file($attFile)) {
+                    sendResponse(false, 'Fichier introuvable', null, 404);
+                }
+                streamAttachment($attFile, (string)$attRow['attachment_type'], (string)$attRow['attachment_name']);
+            }
+
+            if ($action === 'attachment-link') {
+                $linkId = isset($_GET['id']) ? (string)$_GET['id'] : '';
+                if (!preg_match('/^[a-zA-Z0-9]{10,64}$/', $linkId)) {
+                    sendResponse(false, 'Fichier introuvable', null, 404);
+                }
+                $linkStmt = $db->prepare(
+                    "SELECT 1 FROM group_chat_messages m
+                     INNER JOIN group_chat_members gcm ON gcm.group_id = m.group_id
+                     WHERE m.id = :id AND m.attachment_type IS NOT NULL AND gcm.user_id = :uid"
+                );
+                $linkStmt->execute([':id' => $linkId, ':uid' => $userId]);
+                if ($linkStmt->rowCount() === 0) {
+                    sendResponse(false, 'Fichier introuvable', null, 404);
+                }
+                $expires = time() + 120;
+                sendResponse(true, 'Lien généré', [
+                    'url' => rtrim(API_BASE_URL, '/') . '/group_chats.php?action=attachment&id=' . $linkId
+                        . '&exp=' . $expires . '&sig=' . signGroupAttachmentAccess($linkId, $expires),
+                ]);
+            }
+            if ($action === 'member-keys') {
+                // Clés publiques E2EE des membres du groupe (les membres ne sont pas forcément amis entre eux)
+                $keysGroupId = isset($_GET['id']) ? (string)$_GET['id'] : '';
+                if ($keysGroupId === '') {
+                    sendResponse(false, 'id requis', null, 400);
+                }
+                $keysCheck = $db->prepare("SELECT 1 FROM group_chat_members WHERE group_id = :gid AND user_id = :uid");
+                $keysCheck->execute([':gid' => $keysGroupId, ':uid' => $userId]);
+                if ($keysCheck->rowCount() === 0) {
+                    sendResponse(false, 'Accès refusé', null, 403);
+                }
+                $keysStmt = $db->prepare(
+                    "SELECT u.id AS userId, u.e2ee_public_key AS publicKey
+                     FROM group_chat_members gcm
+                     INNER JOIN users u ON u.id = gcm.user_id
+                     WHERE gcm.group_id = :gid AND u.e2ee_public_key IS NOT NULL AND u.e2ee_public_key <> ''"
+                );
+                $keysStmt->execute([':gid' => $keysGroupId]);
+                sendResponse(true, 'Clés récupérées', $keysStmt->fetchAll(PDO::FETCH_ASSOC));
+            }
+
             if ($action === 'messages') {
                 // Récupérer les messages d'un groupe
                 $groupId = isset($_GET['id']) ? $_GET['id'] : '';
@@ -55,17 +149,32 @@ try {
                 }
 
                 $stmt = $db->prepare(
-                    "SELECT id, sender_id AS senderId, sender_name AS senderName, message AS text,
-                            image_data AS imageBase64, image_mime AS imageMime,
-                            reply_to_id AS replyToId, reply_to_text AS replyToText,
-                            reply_to_sender_name AS replyToSenderName,
-                            created_at AS createdAt
-                     FROM group_chat_messages
-                     WHERE group_id = :gid
-                     ORDER BY created_at ASC"
+                    "SELECT m.id, m.sender_id AS senderId, m.sender_name AS senderName, m.message AS text,
+                            m.image_data AS imageBase64, m.image_mime AS imageMime,
+                            m.reply_to_id AS replyToId, m.reply_to_text AS replyToText,
+                            m.reply_to_sender_name AS replyToSenderName,
+                            m.attachment_type AS attachmentType, m.attachment_name AS attachmentName,
+                            m.attachment_size AS attachmentSize, m.attachment_duration_ms AS attachmentDurationMs,
+                            m.is_encrypted AS isEncrypted, m.encryption_version AS encryptionVersion,
+                            p.ciphertext AS ciphertext, p.nonce AS nonce, p.ephemeral_public_key AS ephemeralPublicKey,
+                            m.created_at AS createdAt
+                     FROM group_chat_messages m
+                     LEFT JOIN group_message_payloads p ON p.message_id = m.id AND p.user_id = :uid
+                     WHERE m.group_id = :gid
+                     ORDER BY m.created_at ASC"
                 );
-                $stmt->execute([':gid' => $groupId]);
+                $stmt->execute([':gid' => $groupId, ':uid' => $userId]);
                 $messages = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                foreach ($messages as &$attMsg) {
+                    $attMsg['isEncrypted'] = (int)$attMsg['isEncrypted'] === 1;
+                    $attMsg['attachmentSize'] = $attMsg['attachmentSize'] !== null ? (int)$attMsg['attachmentSize'] : null;
+                    $attMsg['attachmentDurationMs'] = $attMsg['attachmentDurationMs'] !== null ? (int)$attMsg['attachmentDurationMs'] : null;
+                    $attMsg['attachmentUrl'] = !empty($attMsg['attachmentType'])
+                        ? rtrim(API_BASE_URL, '/') . '/group_chats.php?action=attachment&id=' . $attMsg['id']
+                        : null;
+                }
+                unset($attMsg);
 
                 // Images chiffrées au repos (les anciennes, en clair, sont renvoyées telles quelles)
                 foreach ($messages as &$imgMsg) {
@@ -214,7 +323,7 @@ try {
                             $reactorName = trim(($reactor['first_name'] ?? '') . ' ' . ($reactor['last_name'] ?? '')) ?: 'Quelqu\'un';
                             $fcm = new FCMService();
                             $token = $fcm->getUserToken($db, $msgRow['sender_id']);
-                            if ($token) {
+                            if ($token && $fcm->isMessageNotificationEnabled($db, $msgRow['sender_id'])) {
                                 $fcm->sendNotification(
                                     $token,
                                     "$reactorName a réagi",
@@ -251,7 +360,7 @@ try {
                     $reactorName = trim(($reactor['first_name'] ?? '') . ' ' . ($reactor['last_name'] ?? '')) ?: 'Quelqu\'un';
                     $fcm = new FCMService();
                     $token = $fcm->getUserToken($db, $msgRow['sender_id']);
-                    if ($token) {
+                    if ($token && $fcm->isMessageNotificationEnabled($db, $msgRow['sender_id'])) {
                         $preview = !empty($msgRow['sender_name']) ? $msgRow['sender_name'] : 'votre message';
                         $fcm->sendNotification(
                             $token,
@@ -266,13 +375,108 @@ try {
                 sendResponse(true, 'Réaction mise à jour', ['reactions' => $reactions]);
             }
 
+            if ($action === 'message-attachment') {
+                // Message vocal ou fichier joint dans un groupe (chiffré au repos, comme en conversation individuelle)
+                $groupId = $data['groupId'] ?? '';
+                $kind    = $data['kind'] ?? '';
+                if (!is_string($groupId) || $groupId === '' || !isset($data['data']) || !is_string($data['data'])
+                    || !in_array($kind, ['voice', 'file'], true)) {
+                    sendResponse(false, 'groupId, kind et data requis', null, 400);
+                }
+
+                $checkStmt = $db->prepare(
+                    "SELECT 1 FROM group_chat_members WHERE group_id = :gid AND user_id = :uid"
+                );
+                $checkStmt->execute([':gid' => $groupId, ':uid' => $userId]);
+                if ($checkStmt->rowCount() === 0) {
+                    sendResponse(false, 'Accès refusé', null, 403);
+                }
+
+                [$binary, $attachmentMime, $attachmentName, $durationMs, $messageText] = parseAttachmentUpload($data, $kind);
+
+                $uploadDir = __DIR__ . '/uploads/group/';
+                if (!is_dir($uploadDir)) {
+                    mkdir($uploadDir, 0750, true);
+                }
+
+                $msgId = generateId();
+                $filepath = $uploadDir . $msgId . '.att.enc';
+                if (file_put_contents($filepath, encryptAtRest($attachmentMime . "\n" . $binary)) === false) {
+                    sendResponse(false, 'Erreur lors de la sauvegarde du fichier', null, 500);
+                }
+
+                $senderName        = getUserDisplayName($db, $userId);
+                $replyToId         = $data['replyToId'] ?? null;
+                $replyToText       = $data['replyToText'] ?? null;
+                $replyToSenderName = $data['replyToSenderName'] ?? null;
+                $now               = date('Y-m-d H:i:s');
+                $attachmentSize    = strlen($binary);
+
+                try {
+                    $db->prepare(
+                        "INSERT INTO group_chat_messages (
+                            id, group_id, sender_id, sender_name, message, reply_to_id, reply_to_text, reply_to_sender_name, created_at,
+                            attachment_type, attachment_name, attachment_mime, attachment_size, attachment_duration_ms
+                         ) VALUES (
+                            :id, :gid, :sid, :sname, :msg, :rId, :rText, :rSender, :now,
+                            :atype, :aname, :amime, :asize, :adur
+                         )"
+                    )->execute([
+                        ':id'      => $msgId,
+                        ':gid'     => $groupId,
+                        ':sid'     => $userId,
+                        ':sname'   => $senderName,
+                        ':msg'     => $messageText,
+                        ':rId'     => $replyToId,
+                        ':rText'   => $replyToText,
+                        ':rSender' => $replyToSenderName,
+                        ':now'     => $now,
+                        ':atype'   => $kind,
+                        ':aname'   => $attachmentName,
+                        ':amime'   => $attachmentMime,
+                        ':asize'   => $attachmentSize,
+                        ':adur'    => $durationMs,
+                    ]);
+                } catch (Exception $e) {
+                    @unlink($filepath);
+                    throw $e;
+                }
+
+                $db->prepare("UPDATE group_chats SET updated_at = :now WHERE id = :gid")
+                   ->execute([':now' => $now, ':gid' => $groupId]);
+
+                notifyGroupMembers($db, $groupId, $userId, $senderName, $messageText, $msgId);
+
+                sendResponse(true, 'Pièce jointe envoyée', [
+                    'id'                   => $msgId,
+                    'senderId'             => $userId,
+                    'senderName'           => $senderName,
+                    'text'                 => $messageText,
+                    'attachmentType'       => $kind,
+                    'attachmentName'       => $attachmentName,
+                    'attachmentSize'       => $attachmentSize,
+                    'attachmentDurationMs' => $durationMs,
+                    'attachmentUrl'        => rtrim(API_BASE_URL, '/') . '/group_chats.php?action=attachment&id=' . $msgId,
+                    'replyToId'            => $replyToId,
+                    'replyToText'          => $replyToText,
+                    'replyToSenderName'    => $replyToSenderName,
+                    'createdAt'            => $now,
+                ], 201);
+            }
+
             if ($action === 'message') {
                 // Envoyer un message
                 $groupId     = $data['groupId'] ?? '';
                 $text        = $data['text'] ?? '';
                 $imageBase64 = $data['imageBase64'] ?? null;
                 $imageMime   = $data['imageMime'] ?? null;
-                if (empty($groupId) || (empty($text) && empty($imageBase64))) {
+                $isEncrypted = ($data['encryptionVersion'] ?? null) === 'e2ee-v1';
+                $payloads    = $data['payloads'] ?? null;
+                if ($isEncrypted) {
+                    // Le contenu (texte, aperçu de réponse) voyage uniquement dans les charges utiles chiffrées
+                    $text = '';
+                }
+                if (empty($groupId) || (!$isEncrypted && empty($text) && empty($imageBase64))) {
                     sendResponse(false, 'groupId et text ou imageBase64 requis', null, 400);
                 }
                 if (!is_string($text) || mb_strlen($text) > GROUP_MAX_TEXT_LENGTH) {
@@ -296,41 +500,106 @@ try {
                     sendResponse(false, 'Accès refusé', null, 403);
                 }
 
+                $validPayloads = [];
+                if ($isEncrypted) {
+                    if (!is_array($payloads) || count($payloads) === 0 || count($payloads) > GROUP_MAX_MEMBERS + 1) {
+                        sendResponse(false, 'Payload chiffré incomplet', null, 400);
+                    }
+                    $membersStmt = $db->prepare(
+                        "SELECT gcm.user_id, u.e2ee_public_key FROM group_chat_members gcm
+                         INNER JOIN users u ON u.id = gcm.user_id WHERE gcm.group_id = :gid"
+                    );
+                    $membersStmt->execute([':gid' => $groupId]);
+                    $memberKeys = [];
+                    foreach ($membersStmt->fetchAll(PDO::FETCH_ASSOC) as $memberRow) {
+                        $memberKeys[$memberRow['user_id']] = !empty($memberRow['e2ee_public_key']);
+                    }
+                    foreach ($payloads as $payload) {
+                        $payloadUser = is_array($payload) ? ($payload['userId'] ?? null) : null;
+                        if (!is_string($payloadUser) || !isset($memberKeys[$payloadUser]) || isset($validPayloads[$payloadUser])
+                            || empty($payload['ciphertext']) || !is_string($payload['ciphertext'])
+                            || empty($payload['nonce']) || !is_string($payload['nonce']) || strlen($payload['nonce']) > 128
+                            || empty($payload['ephemeralPublicKey']) || !is_string($payload['ephemeralPublicKey']) || strlen($payload['ephemeralPublicKey']) > 128
+                            || strlen($payload['ciphertext']) > 20000) {
+                            sendResponse(false, 'Payload chiffré invalide', null, 400);
+                        }
+                        $validPayloads[$payloadUser] = $payload;
+                    }
+                    // Tous les membres ayant activé le chiffrement (dont l'expéditeur) doivent pouvoir lire le message
+                    foreach ($memberKeys as $memberId => $hasKey) {
+                        if (($hasKey || $memberId === $userId) && !isset($validPayloads[$memberId])) {
+                            sendResponse(false, 'Payload chiffré incomplet', null, 400);
+                        }
+                    }
+                }
+
                 $msgId           = uniqid('m', true) . bin2hex(random_bytes(4));
                 $senderName      = getUserDisplayName($db, $userId);
                 $replyToId       = $data['replyToId'] ?? null;
-                $replyToText     = $data['replyToText'] ?? null;
-                $replyToSenderName = $data['replyToSenderName'] ?? null;
+                $replyToText     = $isEncrypted ? null : ($data['replyToText'] ?? null);
+                $replyToSenderName = $isEncrypted ? null : ($data['replyToSenderName'] ?? null);
                 $now        = date('Y-m-d H:i:s');
 
-                $stmt = $db->prepare(
-                    "INSERT INTO group_chat_messages (id, group_id, sender_id, sender_name, message, image_data, image_mime, reply_to_id, reply_to_text, reply_to_sender_name, created_at)
-                     VALUES (:id, :gid, :sid, :sname, :msg, :imgdata, :imgmime, :rId, :rText, :rSender, :now)"
-                );
-                $stmt->execute([
-                    ':id'      => $msgId,
-                    ':gid'     => $groupId,
-                    ':sid'     => $userId,
-                    ':sname'   => $senderName,
-                    ':msg'     => !empty($text) ? $text : null,
-                    ':imgdata' => !empty($imageBase64) ? 'enc1:' . base64_encode(encryptAtRest($imageBase64)) : null,
-                    ':imgmime' => $imageMime,
-                    ':rId'     => $replyToId,
-                    ':rText'   => $replyToText,
-                    ':rSender' => $replyToSenderName,
-                    ':now'     => $now,
-                ]);
+                $db->beginTransaction();
+                try {
+                    $stmt = $db->prepare(
+                        "INSERT INTO group_chat_messages (id, group_id, sender_id, sender_name, message, is_encrypted, encryption_version, image_data, image_mime, reply_to_id, reply_to_text, reply_to_sender_name, created_at)
+                         VALUES (:id, :gid, :sid, :sname, :msg, :enc, :encv, :imgdata, :imgmime, :rId, :rText, :rSender, :now)"
+                    );
+                    $stmt->execute([
+                        ':id'      => $msgId,
+                        ':gid'     => $groupId,
+                        ':sid'     => $userId,
+                        ':sname'   => $senderName,
+                        ':msg'     => $isEncrypted ? '[Message chiffré]' : (!empty($text) ? $text : null),
+                        ':enc'     => $isEncrypted ? 1 : 0,
+                        ':encv'    => $isEncrypted ? 'e2ee-v1' : null,
+                        ':imgdata' => !empty($imageBase64) ? 'enc1:' . base64_encode(encryptAtRest($imageBase64)) : null,
+                        ':imgmime' => $imageMime,
+                        ':rId'     => $replyToId,
+                        ':rText'   => $replyToText,
+                        ':rSender' => $replyToSenderName,
+                        ':now'     => $now,
+                    ]);
+
+                    if ($isEncrypted) {
+                        $payloadStmt = $db->prepare(
+                            "INSERT INTO group_message_payloads (message_id, user_id, ciphertext, nonce, ephemeral_public_key)
+                             VALUES (:mid, :uid, :ct, :nonce, :eph)"
+                        );
+                        foreach ($validPayloads as $payloadUser => $payload) {
+                            $payloadStmt->execute([
+                                ':mid'   => $msgId,
+                                ':uid'   => $payloadUser,
+                                ':ct'    => $payload['ciphertext'],
+                                ':nonce' => $payload['nonce'],
+                                ':eph'   => $payload['ephemeralPublicKey'],
+                            ]);
+                        }
+                    }
+                    $db->commit();
+                } catch (Exception $e) {
+                    if ($db->inTransaction()) {
+                        $db->rollBack();
+                    }
+                    throw $e;
+                }
 
                 // Mettre à jour updated_at du groupe
                 $db->prepare("UPDATE group_chats SET updated_at = :now WHERE id = :gid")
                    ->execute([':now' => $now, ':gid' => $groupId]);
 
+                $notifyPreview = $isEncrypted
+                    ? (!empty($imageBase64) ? '📷 Photo' : 'Nouveau message')
+                    : (!empty($text) ? $text : '📷 Photo');
+                notifyGroupMembers($db, $groupId, $userId, $senderName, $notifyPreview, $msgId);
+
                 sendResponse(true, 'Message envoyé', [
                     'id'               => $msgId,
                     'senderId'         => $userId,
                     'senderName'       => $senderName,
-                    'text'             => $text,
-                    'imageBase64'      => $imageBase64,
+                    'text'             => $isEncrypted ? '' : $text,
+                    'isEncrypted'      => $isEncrypted,
                     'imageMime'        => $imageMime,
                     'replyToId'        => $replyToId,
                     'replyToText'      => $replyToText,
@@ -405,7 +674,7 @@ try {
                 $creatorName = trim(($creator['first_name'] ?? '') . ' ' . ($creator['last_name'] ?? '')) ?: 'Quelqu\'un';
                 foreach ($memberIds as $memberId) {
                     $token = $fcm->getUserToken($db, $memberId);
-                    if ($token) {
+                    if ($token && $fcm->isMessageNotificationEnabled($db, $memberId)) {
                         $fcm->sendNotification(
                             $token,
                             'Nouveau groupe',
@@ -465,7 +734,15 @@ try {
                 if (empty($msgId)) {
                     sendResponse(false, 'id requis', null, 400);
                 }
-                // Seul l'expéditeur peut supprimer son message
+                // Seul l'expéditeur peut supprimer son message (et sa pièce jointe éventuelle)
+                $delStmt = $db->prepare(
+                    "SELECT attachment_type FROM group_chat_messages WHERE id = :id AND sender_id = :uid"
+                );
+                $delStmt->execute([':id' => $msgId, ':uid' => $userId]);
+                $delRow = $delStmt->fetch(PDO::FETCH_ASSOC);
+                if ($delRow && !empty($delRow['attachment_type']) && preg_match('/^[a-zA-Z0-9]{10,64}$/', $msgId)) {
+                    @unlink(__DIR__ . '/uploads/group/' . $msgId . '.att.enc');
+                }
                 $db->prepare(
                     "DELETE FROM group_chat_messages WHERE id = :id AND sender_id = :uid"
                 )->execute([':id' => $msgId, ':uid' => $userId]);

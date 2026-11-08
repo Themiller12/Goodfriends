@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -15,20 +15,33 @@ import {
   PanResponder,
   Vibration,
   BackHandler,
+  Share,
+  Linking,
   KeyboardAvoidingView as RNKeyboardAvoidingView,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Modal from '../components/AppModal';
+import ZoomableView from '../components/ZoomableView';
+import MessagesLoading from '../components/MessagesLoading';
+import { LinkedText, LinkPreviewCard } from '../components/LinkedText';
+import { VoiceMessage, FileMessage, formatDuration } from '../components/AttachmentBubbles';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAvoidingView, KeyboardEvents } from 'react-native-keyboard-controller';
-import { launchImageLibrary } from 'react-native-image-picker';
+import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
+import { pick, types as pickerTypes, isErrorWithCode, errorCodes } from '@react-native-documents/picker';
 import { useTheme } from '../context/ThemeContext';
 import { Neutral } from '../theme/designSystem';
 import { GroupChat, GroupMessage, GroupMember, GroupMessageReaction } from '../types';
 import GroupChatService from '../services/GroupChatService';
 import AuthService from '../services/AuthService';
+import AudioService from '../services/AudioService';
+import AppStateService from '../services/AppState';
+import NotificationService from '../services/NotificationService';
+import OutboxService from '../services/OutboxService';
+import { ensureCameraPermission, alertPickerError } from '../utils/cameraPermission';
+import { MAX_ATTACHMENT_BYTES, ALLOWED_FILE_EXTENSIONS } from '../services/MessageService';
 
 const REACTIONS = [
   { key: 'love',    emoji: '❤️' },
@@ -85,7 +98,13 @@ const GroupChatScreen: React.FC = () => {
   const { groupId } = route.params as { groupId: string };
 
   const [group, setGroup] = useState<GroupChat | null>(null);
+  // Vrai dès que le serveur a répondu avec les messages : seul moment où "Aucun message" est exact
+  const [serverLoaded, setServerLoaded] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [messages, setMessages] = useState<GroupMessage[]>([]);
+  // Messages en attente d'envoi (hors ligne), affichés après les messages du serveur
+  const [queued, setQueued] = useState<GroupMessage[]>([]);
+  const allMessages = useMemo(() => [...messages, ...queued], [messages, queued]);
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [myUserId, setMyUserId] = useState('me');
@@ -97,7 +116,15 @@ const GroupChatScreen: React.FC = () => {
   const [reactionPickerMsg, setReactionPickerMsg] = useState<GroupMessage | null>(null);
   const [reactionPickerPos, setReactionPickerPos] = useState(300);
   const [lightboxUri, setLightboxUri] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const [playbackPaused, setPlaybackPaused] = useState(false);
+  const [playbackPos, setPlaybackPos] = useState(0);
+  const [playbackDur, setPlaybackDur] = useState(0);
 
+  const recordingRef = useRef(false);
+  const sendRecordingRef = useRef<() => void>(() => {});
   const flatListRef = useRef<FlatList>(null);
   const initialScrolled = useRef(false);
   // Double-tap detection
@@ -122,6 +149,9 @@ const GroupChatScreen: React.FC = () => {
 
   useFocusEffect(useCallback(() => {
     initialScrolled.current = false;
+    // Groupe ouvert : pas de notification pour ses nouveaux messages, et on retire celle déjà affichée
+    AppStateService.setCurrentOpenChat(`group:${groupId}`);
+    NotificationService.clearGroupNotifications(groupId);
     // Pré-peupler depuis le cache AsyncStorage (instantané, pas de "Chargement...")
     AsyncStorage.getItem('@group_chats_cache').then(raw => {
       if (!raw) return;
@@ -145,10 +175,48 @@ const GroupChatScreen: React.FC = () => {
     // Puis rafraîchir depuis l'API
     loadGroup();
     const interval = setInterval(loadGroup, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      AppStateService.setCurrentOpenChat(null);
+    };
   }, [groupId]));
 
   useEffect(() => { loadCurrentUser(); }, []);
+
+  // Lecture des messages vocaux et enregistrement
+  useEffect(() => {
+    const subs = [
+      AudioService.onProgress(p => {
+        setPlaybackPos(p.positionMs);
+        setPlaybackDur(p.durationMs);
+      }),
+      AudioService.onEnd(() => {
+        setPlayingId(null);
+        setPlaybackPaused(false);
+        setPlaybackPos(0);
+      }),
+      AudioService.onError(() => {
+        setPlayingId(null);
+        setPlaybackPaused(false);
+        setPlaybackPos(0);
+      }),
+      AudioService.onRecordingLimit(() => sendRecordingRef.current()),
+    ];
+    return () => {
+      subs.forEach(sub => sub.remove());
+      AudioService.stop();
+      if (recordingRef.current) {
+        recordingRef.current = false;
+        AudioService.cancelRecording().catch(() => {});
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!recording) return;
+    const timer = setInterval(() => setRecordSeconds(sec => sec + 1), 1000);
+    return () => clearInterval(timer);
+  }, [recording]);
 
   useEffect(() => {
     const willShow = KeyboardEvents.addListener('keyboardWillShow', () => { kbAnimatingRef.current = true; });
@@ -184,7 +252,16 @@ const GroupChatScreen: React.FC = () => {
   };
 
   const loadGroup = async () => {
-    const g = await GroupChatService.getById(groupId);
+    let g: GroupChat | null = null;
+    try {
+      g = await GroupChatService.getById(groupId);
+    } catch {}
+    if (g?.messagesLoaded) {
+      setServerLoaded(true);
+      setLoadFailed(false);
+    } else {
+      setLoadFailed(true);
+    }
     if (g) {
       setGroup(g);
       setMessages(prev => {
@@ -195,7 +272,9 @@ const GroupChatScreen: React.FC = () => {
         const withoutDupes = prev.filter(m => {
           if (!pendingIds.current.has(m.id)) return true;
           return !myNewFromServer.some(
-            n => n.text === m.text && (n.imageBase64 ?? null) === (m.imageBase64 ?? null),
+            n => n.text === m.text
+              && (n.imageBase64 ?? null) === (m.imageBase64 ?? null)
+              && (n.attachmentType ?? null) === (m.attachmentType ?? null),
           );
         });
 
@@ -225,6 +304,55 @@ const GroupChatScreen: React.FC = () => {
 
   const pendingIds = useRef<Set<string>>(new Set());
 
+  const refreshQueued = useCallback(() => {
+    setQueued(OutboxService.getPending('group', groupId).map(j => OutboxService.toGroupMessage(j)));
+  }, [groupId]);
+
+  // Résultat d'un envoi : envoyé (remplace le message provisoire) ou mis en attente (hors ligne)
+  const applySendResult = (tmpId: string, result: { status: 'sent'; message: any } | { status: 'queued' }) => {
+    pendingIds.current.delete(tmpId);
+    if (result.status === 'queued') {
+      setMessages(prev => prev.filter(m => m.id !== tmpId));
+      refreshQueued();
+      return;
+    }
+    const sent = result.message as GroupMessage;
+    setMessages(prev => prev.map(m => m.id === tmpId ? sent : m));
+  };
+
+  const handlePendingPress = (item: GroupMessage) => {
+    Alert.alert('Message en attente', "Ce message n'a pas encore été envoyé (pas de connexion).", [
+      { text: 'Réessayer maintenant', onPress: () => OutboxService.flush() },
+      { text: 'Supprimer', style: 'destructive', onPress: () => OutboxService.remove(item.id) },
+      { text: 'Annuler', style: 'cancel' },
+    ]);
+  };
+
+  useEffect(() => {
+    OutboxService.ensureLoaded().then(refreshQueued);
+    const unsubscribe = OutboxService.subscribe(event => {
+      if (event.type === 'changed') {
+        refreshQueued();
+        return;
+      }
+      if (event.job.scope !== 'group' || event.job.targetId !== groupId) return;
+      if (event.type === 'sent') {
+        const sent = event.message as GroupMessage;
+        setMessages(prev => (prev.some(m => m.id === sent.id) ? prev : [...prev, sent]));
+        refreshQueued();
+        setTimeout(() => safeScrollToEnd(true), 50);
+      } else {
+        refreshQueued();
+        Alert.alert('Message non envoyé', event.error);
+      }
+    });
+    OutboxService.flush();
+    return unsubscribe;
+  }, [groupId]);
+
+  const replyPayload = (reply: GroupMessage | null) =>
+    reply ? { id: reply.id, text: reply.text, senderName: reply.senderName } : undefined;
+
   const handleSend = () => {
     if (!inputText.trim() && !replyingTo) return;
     const text = inputText.trim();
@@ -248,27 +376,32 @@ const GroupChatScreen: React.FC = () => {
     setMessages(prev => [...prev, optimistic]);
     setTimeout(() => safeScrollToEnd(true), 50);
 
-    // Envoi en arrière-plan
-    GroupChatService.sendMessage(
-      groupId, text, myUserId, myName, undefined, undefined,
-      reply?.id, reply?.text, reply?.senderName,
-    ).then(msg => {
-      pendingIds.current.delete(tmpId);
-      setMessages(prev => prev.map(m => m.id === tmpId ? msg : m));
-    }).catch(() => {
+    // Envoi en arrière-plan (mis en attente si la connexion est perdue)
+    OutboxService.send({
+      id: tmpId, scope: 'group', kind: 'text', targetId: groupId,
+      payload: { text, senderName: myName, reply: replyPayload(reply) },
+    }).then(result => {
+      applySendResult(tmpId, result);
+    }).catch((e: any) => {
       pendingIds.current.delete(tmpId);
       setMessages(prev => prev.filter(m => m.id !== tmpId));
       setInputText(text); setReplyingTo(reply);
-      Alert.alert('Erreur', "Impossible d'envoyer le message");
+      Alert.alert('Erreur', e?.response?.data?.message || e?.message || "Impossible d'envoyer le message");
     });
   };
 
-  const handlePickPhoto = async () => {
+  const handlePickPhoto = async (source: 'library' | 'camera' = 'library') => {
     try {
-      const result = await launchImageLibrary({
-        mediaType: 'photo', quality: 0.5, maxWidth: 1280, maxHeight: 1280, includeBase64: true,
-      });
-      if (result.didCancel || !result.assets?.length) return;
+      const options = {
+        mediaType: 'photo' as const, quality: 0.5 as const, maxWidth: 1280, maxHeight: 1280, includeBase64: true,
+      };
+      if (source === 'camera' && !(await ensureCameraPermission())) return;
+      const result = source === 'camera'
+        ? await launchCamera({ ...options, cameraType: 'back', saveToPhotos: false })
+        : await launchImageLibrary(options);
+      if (result.didCancel) return;
+      if (alertPickerError(result)) return;
+      if (!result.assets?.length) return;
       const asset = result.assets[0];
       if (!asset.base64 || !asset.type) { Alert.alert('Erreur', "Impossible de lire l'image"); return; }
 
@@ -295,21 +428,177 @@ const GroupChatScreen: React.FC = () => {
       setMessages(prev => [...prev, optimistic]);
       setTimeout(() => safeScrollToEnd(true), 50);
 
-      // Envoi en arrière-plan
-      GroupChatService.sendMessage(
-        groupId, caption, myUserId, myName,
-        asset.base64, asset.type,
-        reply?.id, reply?.text, reply?.senderName,
-      ).then(msg => {
-        pendingIds.current.delete(tmpId);
-        setMessages(prev => prev.map(m => m.id === tmpId ? { ...msg, imageBase64: asset.base64, imageMime: asset.type } : m));
-      }).catch(() => {
+      // Envoi en arrière-plan (mis en attente si la connexion est perdue)
+      OutboxService.send({
+        id: tmpId, scope: 'group', kind: 'photo', targetId: groupId,
+        payload: { base64: asset.base64, mime: asset.type, text: caption, senderName: myName, reply: replyPayload(reply) },
+      }).then(result => {
+        applySendResult(tmpId, result);
+      }).catch((e: any) => {
         pendingIds.current.delete(tmpId);
         setMessages(prev => prev.filter(m => m.id !== tmpId));
         Alert.alert('Erreur', "Impossible d'envoyer la photo");
       });
     } catch {
       Alert.alert('Erreur', "Impossible d'envoyer la photo");
+    }
+  };
+
+  const sendAttachmentMessage = async (
+    kind: 'voice' | 'file',
+    dataBase64: string,
+    opts: { fileName?: string; durationMs?: number; size?: number },
+  ) => {
+    const reply = replyingTo;
+    const tmpId = `tmp-${Date.now()}`;
+    setReplyingTo(null);
+
+    const optimistic: GroupMessage = {
+      id: tmpId,
+      senderId: myUserId,
+      senderName: myName,
+      text: kind === 'voice' ? '🎤 Message vocal' : `📎 ${opts.fileName ?? ''}`,
+      attachmentType: kind,
+      attachmentName: opts.fileName ?? null,
+      attachmentSize: opts.size ?? null,
+      attachmentDurationMs: opts.durationMs ?? null,
+      reactions: [],
+      createdAt: new Date().toISOString(),
+      replyToId: reply?.id,
+      replyToText: reply?.text,
+      replyToSenderName: reply?.senderName,
+    };
+    pendingIds.current.add(tmpId);
+    setMessages(prev => [...prev, optimistic]);
+    setTimeout(() => safeScrollToEnd(true), 50);
+
+    try {
+      const result = await OutboxService.send({
+        id: tmpId, scope: 'group', kind: 'attachment', targetId: groupId,
+        payload: {
+          attachKind: kind, base64: dataBase64, fileName: opts.fileName,
+          durationMs: opts.durationMs, size: opts.size, senderName: myName,
+          reply: replyPayload(reply),
+        },
+      });
+      applySendResult(tmpId, result);
+    } catch (e: any) {
+      pendingIds.current.delete(tmpId);
+      setMessages(prev => prev.filter(m => m.id !== tmpId));
+      Alert.alert('Erreur', e?.response?.data?.message || e?.message || "Impossible d'envoyer le message");
+    }
+  };
+
+  const handlePickFile = async () => {
+    try {
+      const [file] = await pick({ type: [pickerTypes.allFiles], mode: 'import' });
+      const fileName = file.name || 'fichier';
+      const extension = fileName.includes('.') ? fileName.split('.').pop()!.toLowerCase() : '';
+      if (!ALLOWED_FILE_EXTENSIONS.includes(extension)) {
+        Alert.alert('Fichier non autorisé', `Formats acceptés : ${ALLOWED_FILE_EXTENSIONS.join(', ')}`);
+        return;
+      }
+      if (file.size != null && file.size > MAX_ATTACHMENT_BYTES) {
+        Alert.alert('Fichier trop volumineux', 'La taille maximale est de 5 Mo.');
+        return;
+      }
+      const dataBase64 = await AudioService.readBase64(file.uri, MAX_ATTACHMENT_BYTES);
+      await sendAttachmentMessage('file', dataBase64, { fileName, size: file.size ?? undefined });
+    } catch (e: any) {
+      if (isErrorWithCode(e) && e.code === errorCodes.OPERATION_CANCELED) return;
+      if (e?.code === 'FILE_TOO_LARGE') {
+        Alert.alert('Fichier trop volumineux', 'La taille maximale est de 5 Mo.');
+        return;
+      }
+      Alert.alert('Erreur', e?.message || "Impossible d'envoyer le fichier");
+    }
+  };
+
+  const handleOpenFile = async (item: GroupMessage) => {
+    if (item.id.startsWith('tmp-')) return;
+    try {
+      const url = await GroupChatService.getAttachmentLink(item.id);
+      if (Platform.OS === 'ios') {
+        await Share.share({ url, message: '' });
+      } else {
+        await Linking.openURL(url);
+      }
+    } catch {
+      Alert.alert('Erreur', "Impossible d'ouvrir le fichier");
+    }
+  };
+
+  const handleStartRecording = async () => {
+    if (!AudioService.isAvailable) {
+      Alert.alert('Indisponible', 'Les messages vocaux ne sont pas disponibles sur cet appareil.');
+      return;
+    }
+    try {
+      if (!(await AudioService.requestMicrophonePermission())) {
+        Alert.alert('Microphone', "L'accès au microphone est nécessaire pour enregistrer un message vocal.");
+        return;
+      }
+      AudioService.stop();
+      setPlayingId(null);
+      await AudioService.startRecording();
+      recordingRef.current = true;
+      setRecordSeconds(0);
+      setRecording(true);
+    } catch (e: any) {
+      Alert.alert('Erreur', e?.message || "Impossible de démarrer l'enregistrement");
+    }
+  };
+
+  const handleCancelRecording = async () => {
+    recordingRef.current = false;
+    setRecording(false);
+    try {
+      await AudioService.cancelRecording();
+    } catch {}
+  };
+
+  const handleSendRecording = async () => {
+    if (!recordingRef.current) return;
+    recordingRef.current = false;
+    setRecording(false);
+    let path: string | null = null;
+    try {
+      const rec = await AudioService.stopRecording();
+      path = rec.path;
+      if (rec.durationMs < 700) return; // appui accidentel
+      const dataBase64 = await AudioService.readBase64(rec.path, MAX_ATTACHMENT_BYTES);
+      await sendAttachmentMessage('voice', dataBase64, { durationMs: rec.durationMs, size: rec.size });
+    } catch (e: any) {
+      Alert.alert('Erreur', e?.message || "Impossible d'envoyer le message vocal");
+    } finally {
+      if (path) AudioService.deleteFile(path).catch(() => {});
+    }
+  };
+  sendRecordingRef.current = handleSendRecording;
+
+  const handleTogglePlay = async (item: GroupMessage) => {
+    if (item.id.startsWith('tmp-')) return;
+    if (playingId === item.id) {
+      if (playbackPaused) {
+        AudioService.resume();
+        setPlaybackPaused(false);
+      } else {
+        AudioService.pause();
+        setPlaybackPaused(true);
+      }
+      return;
+    }
+    setPlayingId(item.id);
+    setPlaybackPaused(false);
+    setPlaybackPos(0);
+    setPlaybackDur(item.attachmentDurationMs ?? 0);
+    try {
+      const url = await GroupChatService.getAttachmentLink(item.id);
+      const duration = await AudioService.play(item.id, url);
+      if (duration > 0) setPlaybackDur(duration);
+    } catch {
+      setPlayingId(null);
+      Alert.alert('Erreur', 'Lecture du message vocal impossible');
     }
   };
 
@@ -381,7 +670,7 @@ const GroupChatScreen: React.FC = () => {
   };
 
   const scrollToMessage = (messageId: string) => {
-    const index = messages.findIndex(m => m.id === messageId);
+    const index = allMessages.findIndex(m => m.id === messageId);
     if (index !== -1) flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
   };
 
@@ -424,7 +713,7 @@ const GroupChatScreen: React.FC = () => {
 
   const renderMessage = ({ item, index }: { item: GroupMessage; index: number }) => {
     const isMe = item.senderId === myUserId;
-    const showSender = !isMe && (index === 0 || messages[index - 1].senderId !== item.senderId);
+    const showSender = !isMe && (index === 0 || allMessages[index - 1].senderId !== item.senderId);
     const imageUri = getImageUri(item);
     const agg = aggregateReactions(item.reactions ?? []);
 
@@ -442,8 +731,8 @@ const GroupChatScreen: React.FC = () => {
           <SwipeableMessage onSwipeRight={() => setReplyingTo(item)}>
             <TouchableOpacity
               activeOpacity={0.85}
-              onLongPress={(e) => { setReactionPickerMsg(item); setReactionPickerPos(e.nativeEvent.pageY); }}
-              onPress={() => handleDoubleTap(item)}
+              onLongPress={(e) => { if (item.pending) return; setReactionPickerMsg(item); setReactionPickerPos(e.nativeEvent.pageY); }}
+              onPress={() => (item.pending ? handlePendingPress(item) : handleDoubleTap(item))}
               delayLongPress={350}>
               <View style={[S.bubble, isMe ? S.bubbleMe : S.bubbleOther, item.replyToId ? S.bubbleWithQuote : null]}>
                 {showSender && !isMe && (
@@ -474,12 +763,48 @@ const GroupChatScreen: React.FC = () => {
                     <Image source={{ uri: imageUri }} style={S.messagePhoto} resizeMode="cover" />
                   </TouchableOpacity>
                 )}
-                {!!item.text && (
-                  <Text style={[S.bubbleText, isMe ? S.bubbleTextMe : S.bubbleTextOther]}>{item.text}</Text>
+                {/* Voice message */}
+                {item.attachmentType === 'voice' && (() => {
+                  const isPlaying = playingId === item.id;
+                  const duration = isPlaying && playbackDur > 0 ? playbackDur : (item.attachmentDurationMs ?? 0);
+                  return (
+                    <VoiceMessage
+                      isMe={isMe}
+                      accentColor={theme.primary}
+                      isPlaying={isPlaying}
+                      paused={playbackPaused}
+                      positionMs={playbackPos}
+                      durationMs={duration}
+                      onToggle={() => handleTogglePlay(item)}
+                    />
+                  );
+                })()}
+                {/* File attachment */}
+                {item.attachmentType === 'file' && (
+                  <FileMessage
+                    isMe={isMe}
+                    accentColor={theme.primary}
+                    name={item.attachmentName}
+                    size={item.attachmentSize}
+                    onPress={() => handleOpenFile(item)}
+                  />
+                )}
+                {!!item.text && !item.attachmentType && (
+                  <>
+                    <LinkedText
+                      text={item.text}
+                      style={[S.bubbleText, isMe ? S.bubbleTextMe : S.bubbleTextOther]}
+                      linkColor={isMe ? '#FFF' : '#1a73e8'}
+                    />
+                    <LinkPreviewCard text={item.text} isMe={isMe} />
+                  </>
                 )}
                 <Text style={[S.bubbleTime, isMe ? S.bubbleTimeMe : S.bubbleTimeOther]}>
-                  {formatTime(item.createdAt)}
+                  {item.pending ? '🕓 ' : ''}{formatTime(item.createdAt)}
                 </Text>
+                {item.pending && (
+                  <Text style={S.pendingText}>En attente de connexion — touchez pour réessayer</Text>
+                )}
               </View>
             </TouchableOpacity>
           </SwipeableMessage>
@@ -530,27 +855,38 @@ const GroupChatScreen: React.FC = () => {
       {/* Content area — keyboard handled by KeyboardAvoidingView */}
       <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
         {!group ? (
-          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            <Text style={{ color: Neutral[600] }}>Chargement...</Text>
-          </View>
+          <MessagesLoading variant="chat" label="Chargement de la conversation…" />
         ) : (<>
 
         <FlatList
           ref={flatListRef}
           style={{ flex: 1 }}
-          data={messages}
+          data={allMessages}
           keyExtractor={item => item.id}
           renderItem={renderMessage}
-          contentContainerStyle={[S.messageList, messages.length === 0 && S.emptyList]}
+          contentContainerStyle={[S.messageList, allMessages.length === 0 && S.emptyList]}
           onScrollToIndexFailed={info =>
             flatListRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true })
           }
           ListEmptyComponent={
-            <View style={S.emptyContainer}>
-              <MaterialIcons name="chat-bubble-outline" size={48} color={Neutral[300]} />
-              <Text style={S.emptyText}>Aucun message pour l'instant</Text>
-              <Text style={S.emptySub}>Soyez le premier à écrire !</Text>
-            </View>
+            serverLoaded ? (
+              <View style={S.emptyContainer}>
+                <MaterialIcons name="chat-bubble-outline" size={48} color={Neutral[300]} />
+                <Text style={S.emptyText}>Aucun message pour l'instant</Text>
+                <Text style={S.emptySub}>Soyez le premier à écrire !</Text>
+              </View>
+            ) : loadFailed ? (
+              <View style={S.emptyContainer}>
+                <MaterialIcons name="cloud-off" size={48} color={Neutral[300]} />
+                <Text style={S.emptyText}>Messages indisponibles</Text>
+                <Text style={S.emptySub}>Vos messages ne sont pas perdus, la connexion a échoué.</Text>
+                <TouchableOpacity onPress={loadGroup} style={{ marginTop: 12, padding: 8 }}>
+                  <Text style={{ color: theme.primary, fontWeight: '600' }}>Réessayer</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <MessagesLoading variant="chat" label="Chargement de la conversation…" />
+            )
           }
         />
 
@@ -571,9 +907,30 @@ const GroupChatScreen: React.FC = () => {
         )}
 
         {/* Input bar */}
+        {recording ? (
+        <View style={[S.inputBar, { paddingBottom: insets.bottom + 8, alignItems: 'center' }]}>
+          <TouchableOpacity onPress={handleCancelRecording} style={S.photoBtn}>
+            <MaterialIcons name="delete" size={26} color="#D32F2F" />
+          </TouchableOpacity>
+          <View style={S.recordingInfo}>
+            <View style={S.recordingDot} />
+            <Text style={S.recordingTime}>{formatDuration(recordSeconds * 1000)}</Text>
+            <Text style={S.recordingHint}>Enregistrement…</Text>
+          </View>
+          <TouchableOpacity onPress={handleSendRecording} style={S.sendBtn}>
+            <MaterialIcons name="send" size={22} color="#FFF" />
+          </TouchableOpacity>
+        </View>
+        ) : (
         <View style={[S.inputBar, { paddingBottom: insets.bottom + 8 }]}>
-          <TouchableOpacity onPress={handlePickPhoto} style={S.photoBtn}>
+          <TouchableOpacity onPress={() => handlePickPhoto('library')} style={S.photoBtn}>
             <MaterialIcons name="image" size={24} color={theme.primary} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => handlePickPhoto('camera')} style={S.photoBtn}>
+            <MaterialIcons name="photo-camera" size={24} color={theme.primary} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handlePickFile} style={S.photoBtn}>
+            <MaterialIcons name="attach-file" size={24} color={theme.primary} />
           </TouchableOpacity>
           <TextInput
             style={S.input}
@@ -585,13 +942,19 @@ const GroupChatScreen: React.FC = () => {
             maxLength={2000}
             editable
           />
+          {inputText.trim() ? (
           <TouchableOpacity
-            style={[S.sendBtn, (!inputText.trim() && !replyingTo) && S.sendBtnDisabled]}
-            onPress={handleSend}
-            disabled={!inputText.trim() && !replyingTo}>
+            style={S.sendBtn}
+            onPress={handleSend}>
             <MaterialIcons name="send" size={22} color="#FFF" />
           </TouchableOpacity>
+          ) : (
+          <TouchableOpacity style={S.sendBtn} onPress={handleStartRecording}>
+            <MaterialIcons name="mic" size={22} color="#FFF" />
+          </TouchableOpacity>
+          )}
         </View>
+        )}
         </>)}
       </KeyboardAvoidingView>
 
@@ -649,8 +1012,11 @@ const GroupChatScreen: React.FC = () => {
       {/* Lightbox */}
       <Modal visible={lightboxUri !== null} transparent animationType="fade" onRequestClose={() => setLightboxUri(null)}>
         <View style={S.lightboxOverlay}>
-          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setLightboxUri(null)} />
-          {lightboxUri && <Image source={{ uri: lightboxUri }} style={S.lightboxImage} resizeMode="contain" />}
+          {lightboxUri && (
+            <ZoomableView onSingleTap={() => setLightboxUri(null)}>
+              <Image source={{ uri: lightboxUri }} style={S.lightboxImage} resizeMode="contain" />
+            </ZoomableView>
+          )}
           <TouchableOpacity style={S.lightboxClose} onPress={() => setLightboxUri(null)}>
             <MaterialIcons name="close" size={22} color="#FFF" />
           </TouchableOpacity>
@@ -760,6 +1126,7 @@ const styles = (theme: any) => StyleSheet.create({
   bubbleTime: { fontSize: 10, marginTop: 3 },
   bubbleTimeMe: { color: 'rgba(255,255,255,0.7)', textAlign: 'right' },
   bubbleTimeOther: { color: Neutral[400], textAlign: 'right' },
+  pendingText: { fontSize: 10, fontStyle: 'italic', color: 'rgba(255,255,255,0.85)', textAlign: 'right', marginTop: 2 },
   replyQuote: {
     flexDirection: 'row', borderRadius: 6, marginBottom: 6,
     overflow: 'hidden',
@@ -795,7 +1162,11 @@ const styles = (theme: any) => StyleSheet.create({
     shadowOpacity: 0.06,
     shadowRadius: 4,
   },
-  photoBtn: { padding: 6, marginRight: 4, marginBottom: 2 },
+  photoBtn: { padding: 6, marginRight: 2, marginBottom: 2 },
+  recordingInfo: { flex: 1, flexDirection: 'row', alignItems: 'center', marginHorizontal: 8 },
+  recordingDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#D32F2F', marginRight: 8 },
+  recordingTime: { fontSize: 16, fontWeight: '700', color: Neutral[800], marginRight: 10 },
+  recordingHint: { fontSize: 13, color: Neutral[500] },
   input: {
     flex: 1,
     backgroundColor: Neutral[100],

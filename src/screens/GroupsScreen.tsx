@@ -12,6 +12,7 @@ import {Picker} from '@react-native-picker/picker';
 import Modal from '../components/AppModal';
 import {useTheme} from '../context/ThemeContext';
 import ScreenHeader from '../components/ScreenHeader';
+import LoadingView from '../components/LoadingView';
 import {ContactGroup, GroupType} from '../types';
 import StorageService from '../services/StorageService';
 import ContactService from '../services/ContactService';
@@ -23,6 +24,7 @@ interface GroupsScreenProps {
 const GroupsScreen: React.FC<GroupsScreenProps> = ({navigation}) => {
   const {theme} = useTheme();
   const [groups, setGroups] = useState<ContactGroup[]>([]);
+  const [loadingGroups, setLoadingGroups] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [groupType, setGroupType] = useState<GroupType>(GroupType.OTHER);
@@ -37,8 +39,12 @@ const GroupsScreen: React.FC<GroupsScreenProps> = ({navigation}) => {
   }, [navigation]);
 
   const loadGroups = async () => {
-    const loadedGroups = await StorageService.getGroups();
-    setGroups(loadedGroups);
+    try {
+      const loadedGroups = await StorageService.getGroups();
+      setGroups(loadedGroups);
+    } finally {
+      setLoadingGroups(false);
+    }
   };
 
   const handleAddGroup = async () => {
@@ -127,12 +133,16 @@ const GroupsScreen: React.FC<GroupsScreenProps> = ({navigation}) => {
           </View>
         )}
         ListEmptyComponent={
+          loadingGroups ? (
+            <LoadingView label="Chargement des groupes…" />
+          ) : (
           <View style={styles(theme).emptyContainer}>
             <Text style={styles(theme).emptyText}>Aucun groupe créé</Text>
             <Text style={styles(theme).emptySubtext}>
               Créez des groupes pour organiser vos contacts
             </Text>
           </View>
+          )
         }
       />
 

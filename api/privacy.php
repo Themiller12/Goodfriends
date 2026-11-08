@@ -48,11 +48,19 @@ if ($method === 'PUT') {
         sendResponse(false, 'Données invalides', null, 400);
     }
 
-    // Valider les champs attendus
-    $isProfilePublic    = isset($data['isProfilePublic'])    ? (int)(bool)$data['isProfilePublic']    : 1;
-    $showOnlineStatus   = isset($data['showOnlineStatus'])   ? (int)(bool)$data['showOnlineStatus']   : 1;
-    $allowSearchEmail   = isset($data['allowSearchByEmail']) ? (int)(bool)$data['allowSearchByEmail'] : 1;
-    $allowSearchPhone   = isset($data['allowSearchByPhone']) ? (int)(bool)$data['allowSearchByPhone'] : 1;
+    // Les champs absents conservent leur valeur actuelle (ne jamais repasser en public par omission)
+    $currentStmt = $db->prepare(
+        "SELECT privacy_profile_public, privacy_show_online, privacy_allow_search_email, privacy_allow_search_phone
+         FROM user_profiles WHERE user_id = :user_id"
+    );
+    $currentStmt->bindParam(':user_id', $userId);
+    $currentStmt->execute();
+    $current = $currentStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+    $isProfilePublic    = isset($data['isProfilePublic'])    ? (int)(bool)$data['isProfilePublic']    : (int)($current['privacy_profile_public'] ?? 1);
+    $showOnlineStatus   = isset($data['showOnlineStatus'])   ? (int)(bool)$data['showOnlineStatus']   : (int)($current['privacy_show_online'] ?? 1);
+    $allowSearchEmail   = isset($data['allowSearchByEmail']) ? (int)(bool)$data['allowSearchByEmail'] : (int)($current['privacy_allow_search_email'] ?? 1);
+    $allowSearchPhone   = isset($data['allowSearchByPhone']) ? (int)(bool)$data['allowSearchByPhone'] : (int)($current['privacy_allow_search_phone'] ?? 1);
 
     // Upsert : mettre à jour si existe, insérer sinon
     $query = "INSERT INTO user_profiles 

@@ -18,6 +18,7 @@ import {launchImageLibrary} from 'react-native-image-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import {useTheme} from '../context/ThemeContext';
 import ScreenHeader from '../components/ScreenHeader';
+import LoadingView from '../components/LoadingView';
 import {Neutral, Spacing, Radius, Shadow, Typography} from '../theme/designSystem';
 import ContactService from '../services/ContactService';
 import StorageService from '../services/StorageService';
@@ -607,6 +608,7 @@ const AddContactScreen: React.FC<AddContactScreenProps> = ({navigation}) => {
         </View>
       </Modal>
     </ScrollView>
+    {loading && <LoadingView overlay label="Enregistrement…" />}
     </View>
   );
 };

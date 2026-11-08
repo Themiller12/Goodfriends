@@ -10,6 +10,7 @@ import {
   Platform,
   ScrollView,
   Image,
+  ActivityIndicator,
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import AuthService from '../services/AuthService';
@@ -185,9 +186,11 @@ const RegisterScreen: React.FC<RegisterScreenProps> = ({navigation}) => {
             onPress={handleRegister}
             activeOpacity={0.85}
             disabled={loading}>
-            <Text style={S.btnText}>
-              {loading ? 'Création…' : 'Créer mon compte'}
-            </Text>
+            {loading ? (
+              <ActivityIndicator color="#FFF" />
+            ) : (
+              <Text style={S.btnText}>Créer mon compte</Text>
+            )}
           </TouchableOpacity>
 
           <TouchableOpacity style={S.linkBtn} onPress={() => navigation.goBack()}>

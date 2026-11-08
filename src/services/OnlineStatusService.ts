@@ -15,6 +15,7 @@ class OnlineStatusService {
 
   // ── Heartbeat ────────────────────────────────────────────────────────────
   startHeartbeat() {
+    this.stopHeartbeat();
     this.sendHeartbeat();
     this.heartbeatTimer = setInterval(() => this.sendHeartbeat(), HEARTBEAT_INTERVAL);
   }
@@ -23,6 +24,15 @@ class OnlineStatusService {
     if (this.heartbeatTimer !== null) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+  }
+
+  // Quitter l'application (arrière-plan, déconnexion) : ne plus apparaître en ligne
+  async setOffline() {
+    try {
+      await ApiClient.post(API_CONFIG.BASE_URL + API_CONFIG.ENDPOINTS.ONLINE_STATUS, {offline: true});
+    } catch {
+      // silencieux : le statut expirera de lui-même
     }
   }
 

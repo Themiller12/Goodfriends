@@ -20,17 +20,23 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Text, ActivityIndicator } from 'react-native-paper';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Modal from '../components/AppModal';
+import ZoomableView from '../components/ZoomableView';
 import { Neutral } from '../theme/designSystem';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAvoidingView, KeyboardEvents } from 'react-native-keyboard-controller';
-import { launchImageLibrary } from 'react-native-image-picker';
+import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import { pick, types as pickerTypes, isErrorWithCode, errorCodes } from '@react-native-documents/picker';
 import { useTheme } from '../context/ThemeContext';
 import MessageService, { Message, MessageReaction, MAX_ATTACHMENT_BYTES, ALLOWED_FILE_EXTENSIONS } from '../services/MessageService';
 import AudioService from '../services/AudioService';
 import AuthService from '../services/AuthService';
 import AppState from '../services/AppState';
+import NotificationService from '../services/NotificationService';
+import OutboxService from '../services/OutboxService';
+import MessagesLoading from '../components/MessagesLoading';
+import { LinkedText, LinkPreviewCard } from '../components/LinkedText';
+import { ensureCameraPermission, alertPickerError } from '../utils/cameraPermission';
 import StorageService from '../services/StorageService';
 import OnlineStatusService from '../services/OnlineStatusService';
 import ApiClient from '../services/ApiClient';
@@ -136,8 +142,13 @@ const ChatScreen: React.FC = () => {
   };
 
   const [messages, setMessages] = useState<Message[]>([]);
+  // Messages en attente d'envoi (hors ligne), affichés après les messages du serveur
+  const [queued, setQueued] = useState<Message[]>([]);
+  const allMessages = useMemo(() => [...messages, ...queued], [messages, queued]);
   const [newMessage, setNewMessage] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  // Vrai dès que le serveur a répondu : seul moment où "Aucun message" est exact
+  const [serverLoaded, setServerLoaded] = useState(false);
   const [sending, setSending] = useState(false);
   const [currentUserId, setCurrentUserId] = useState('');
   const [lightboxUri, setLightboxUri] = useState<string | null>(null);
@@ -187,6 +198,7 @@ const ChatScreen: React.FC = () => {
 
   useEffect(() => {
     setListReady(false);
+    setServerLoaded(false);
     setLocalContactId(null);
     StorageService.getContacts().then(contacts => {
       const found = contacts.find(c => c.goodfriendsUserId === otherUserId);
@@ -207,6 +219,7 @@ const ChatScreen: React.FC = () => {
 
     return () => {
       AppState.setCurrentOpenChat(null);
+      markRead();
       if (pollingRef.current) clearInterval(pollingRef.current);
       if (onlinePollingRef.current) clearInterval(onlinePollingRef.current);
       if (scrollReadyTimerRef.current) clearTimeout(scrollReadyTimerRef.current);
@@ -316,7 +329,13 @@ const ChatScreen: React.FC = () => {
     try {
       const data = await MessageService.getConversation(otherUserId);
       setNetworkError(false);
+      setServerLoaded(true);
       setHasMore(data.length >= 100);
+
+      // Messages reçus pendant que la conversation est ouverte : les marquer comme lus
+      if (data.some(m => m.receiverId === currentUserIdRef.current && !m.isRead)) {
+        markRead();
+      }
 
       if (silent || cacheShown) {
         // Ajouter uniquement les nouveaux messages par rapport au cache/état actuel
@@ -392,7 +411,9 @@ const ChatScreen: React.FC = () => {
   };
 
   const saveCache = (msgs: Message[]) => {
-    AsyncStorage.setItem(cacheKey, JSON.stringify(msgs.slice(-CACHE_SIZE))).catch(() => {});
+    // Les messages provisoires (en cours d'envoi ou en attente) ne font pas partie du cache serveur
+    const stable = msgs.filter(m => !m.id.startsWith('tmp-'));
+    AsyncStorage.setItem(cacheKey, JSON.stringify(stable.slice(-CACHE_SIZE))).catch(() => {});
   };
 
   const loadOlderMessages = async () => {
@@ -410,11 +431,81 @@ const ChatScreen: React.FC = () => {
     }
   };
 
+  const markReadInFlightRef = useRef(false);
   const markRead = async () => {
+    if (markReadInFlightRef.current) return;
+    markReadInFlightRef.current = true;
     try { await MessageService.markAsRead(otherUserId); } catch {}
+    finally { markReadInFlightRef.current = false; }
+
+    // Retirer la notification de cette conversation (tag FCM : msg_<id plus petit>_<id plus grand>)
+    try {
+      const me = currentUserIdRef.current || (await AuthService.getCurrentUser())?.id;
+      await NotificationService.clearMessageNotifications(
+        otherUserId,
+        me ? [me, otherUserId].sort().join('_') : undefined,
+      );
+    } catch {}
   };
 
   const pendingIds = useRef<Set<string>>(new Set());
+
+  const refreshQueued = useCallback(() => {
+    setQueued(OutboxService.getPending('dm', otherUserId).map(j => OutboxService.toDirectMessage(j)));
+  }, [otherUserId]);
+
+  // Résultat d'un envoi : envoyé (remplace le message provisoire) ou mis en attente (hors ligne)
+  const applySendResult = (tmpId: string, result: { status: 'sent'; message: any } | { status: 'queued' }) => {
+    pendingIds.current.delete(tmpId);
+    if (result.status === 'queued') {
+      setMessages(prev => prev.filter(m => m.id !== tmpId));
+      refreshQueued();
+      return;
+    }
+    const sent = result.message as Message;
+    setMessages(prev => {
+      const updated = prev.map(m => m.id === tmpId ? sent : m);
+      lastMessageIdRef.current = sent.id;
+      saveCache(updated.slice(-CACHE_SIZE));
+      return updated;
+    });
+  };
+
+  const handlePendingPress = (item: Message) => {
+    Alert.alert('Message en attente', "Ce message n'a pas encore été envoyé (pas de connexion).", [
+      { text: 'Réessayer maintenant', onPress: () => OutboxService.flush() },
+      { text: 'Supprimer', style: 'destructive', onPress: () => OutboxService.remove(item.id) },
+      { text: 'Annuler', style: 'cancel' },
+    ]);
+  };
+
+  useEffect(() => {
+    OutboxService.ensureLoaded().then(refreshQueued);
+    const unsubscribe = OutboxService.subscribe(event => {
+      if (event.type === 'changed') {
+        refreshQueued();
+        return;
+      }
+      if (event.job.scope !== 'dm' || event.job.targetId !== otherUserId) return;
+      if (event.type === 'sent') {
+        const sent = event.message as Message;
+        setMessages(prev => {
+          if (prev.some(m => m.id === sent.id)) return prev;
+          const updated = [...prev, sent];
+          lastMessageIdRef.current = sent.id;
+          saveCache(updated.slice(-CACHE_SIZE));
+          return updated;
+        });
+        refreshQueued();
+        setTimeout(() => safeScrollToEnd(true), 50);
+      } else {
+        refreshQueued();
+        Alert.alert('Message non envoyé', event.error);
+      }
+    });
+    OutboxService.flush();
+    return unsubscribe;
+  }, [otherUserId]);
 
   const handleSend = () => {
     if (!newMessage.trim()) return;
@@ -441,15 +532,12 @@ const ChatScreen: React.FC = () => {
     setMessages(prev => [...prev, optimistic]);
     setTimeout(() => safeScrollToEnd(true), 50);
 
-    // Envoi en arrière-plan
-    MessageService.sendMessage(otherUserId, text, reply?.id).then(sent => {
-      pendingIds.current.delete(tmpId);
-      setMessages(prev => {
-        const updated = prev.map(m => m.id === tmpId ? sent : m);
-        lastMessageIdRef.current = sent.id;
-        saveCache(updated.slice(-CACHE_SIZE));
-        return updated;
-      });
+    // Envoi en arrière-plan (mis en attente si la connexion est perdue)
+    OutboxService.send({
+      id: tmpId, scope: 'dm', kind: 'text', targetId: otherUserId,
+      payload: { text, reply: reply ? { id: reply.id, text: reply.message, senderId: reply.senderId } : undefined },
+    }).then(result => {
+      applySendResult(tmpId, result);
     }).catch((e: any) => {
       pendingIds.current.delete(tmpId);
       setMessages(prev => prev.filter(m => m.id !== tmpId));
@@ -466,12 +554,18 @@ const ChatScreen: React.FC = () => {
     });
   };
 
-  const handlePickPhoto = async () => {
+  const handlePickPhoto = async (source: 'library' | 'camera' = 'library') => {
     try {
-      const result = await launchImageLibrary({
-        mediaType: 'photo', quality: 0.5, maxWidth: 1280, maxHeight: 1280, includeBase64: true,
-      });
-      if (result.didCancel || !result.assets?.length) return;
+      const options = {
+        mediaType: 'photo' as const, quality: 0.5 as const, maxWidth: 1280, maxHeight: 1280, includeBase64: true,
+      };
+      if (source === 'camera' && !(await ensureCameraPermission())) return;
+      const result = source === 'camera'
+        ? await launchCamera({ ...options, cameraType: 'back', saveToPhotos: false })
+        : await launchImageLibrary(options);
+      if (result.didCancel) return;
+      if (alertPickerError(result)) return;
+      if (!result.assets?.length) return;
       const asset = result.assets[0];
       if (!asset.base64 || !asset.type) { Alert.alert('Erreur', "Impossible de lire l'image"); return; }
 
@@ -499,15 +593,15 @@ const ChatScreen: React.FC = () => {
       setMessages(prev => [...prev, optimistic]);
       setTimeout(() => safeScrollToEnd(true), 50);
 
-      // Envoi en arrière-plan
-      MessageService.sendPhoto(otherUserId, asset.base64, asset.type, caption, reply?.id).then(sent => {
-        pendingIds.current.delete(tmpId);
-        setMessages(prev => {
-          const updated = prev.map(m => m.id === tmpId ? sent : m);
-          lastMessageIdRef.current = sent.id;
-          saveCache(updated.slice(-CACHE_SIZE));
-          return updated;
-        });
+      // Envoi en arrière-plan (mis en attente si la connexion est perdue)
+      OutboxService.send({
+        id: tmpId, scope: 'dm', kind: 'photo', targetId: otherUserId,
+        payload: {
+          base64: asset.base64, mime: asset.type, text: caption,
+          reply: reply ? { id: reply.id, text: reply.message, senderId: reply.senderId } : undefined,
+        },
+      }).then(result => {
+        applySendResult(tmpId, result);
       }).catch((e: any) => {
         pendingIds.current.delete(tmpId);
         setMessages(prev => prev.filter(m => m.id !== tmpId));
@@ -548,18 +642,15 @@ const ChatScreen: React.FC = () => {
     setTimeout(() => safeScrollToEnd(true), 50);
 
     try {
-      const sent = await MessageService.sendAttachment(otherUserId, kind, dataBase64, {
-        fileName: opts.fileName,
-        durationMs: opts.durationMs,
-        replyToId: reply?.id,
+      const result = await OutboxService.send({
+        id: tmpId, scope: 'dm', kind: 'attachment', targetId: otherUserId,
+        payload: {
+          attachKind: kind, base64: dataBase64, fileName: opts.fileName,
+          durationMs: opts.durationMs, size: opts.size,
+          reply: reply ? { id: reply.id, text: reply.message, senderId: reply.senderId } : undefined,
+        },
       });
-      pendingIds.current.delete(tmpId);
-      setMessages(prev => {
-        const updated = prev.map(m => m.id === tmpId ? sent : m);
-        lastMessageIdRef.current = sent.id;
-        saveCache(updated.slice(-CACHE_SIZE));
-        return updated;
-      });
+      applySendResult(tmpId, result);
     } catch (e: any) {
       pendingIds.current.delete(tmpId);
       setMessages(prev => prev.filter(m => m.id !== tmpId));
@@ -735,7 +826,7 @@ const ChatScreen: React.FC = () => {
   };
 
   const scrollToMessage = (messageId: string) => {
-    const index = messages.findIndex(m => m.id === messageId);
+    const index = allMessages.findIndex(m => m.id === messageId);
     if (index !== -1) {
       flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
     }
@@ -766,30 +857,7 @@ const ChatScreen: React.FC = () => {
     return date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) + ' ' + date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
   };
 
-  const URL_REGEX = /https?:\/\/[^\s]+|www\.[^\s]+/gi;
-  const renderMessageText = (text: string, style: any) => {
-    const parts: { text: string; isUrl: boolean }[] = [];
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-    const regex = new RegExp(URL_REGEX.source, 'gi');
-    while ((match = regex.exec(text)) !== null) {
-      if (match.index > lastIndex) parts.push({ text: text.slice(lastIndex, match.index), isUrl: false });
-      parts.push({ text: match[0], isUrl: true });
-      lastIndex = match.index + match[0].length;
-    }
-    if (lastIndex < text.length) parts.push({ text: text.slice(lastIndex), isUrl: false });
-    if (!parts.length) return <RNText style={style}>{text}</RNText>;
-    return (
-      <RNText style={style}>
-        {parts.map((p, i) => p.isUrl
-          ? <RNText key={i} style={[style, { color: '#1a73e8', textDecorationLine: 'underline' }]}
-              onPress={() => Linking.openURL(p.text.startsWith('http') ? p.text : `https://${p.text}`)}>{p.text}</RNText>
-          : <RNText key={i}>{p.text}</RNText>)}
-      </RNText>
-    );
-  };
-
-  const renderMessage = ({ item }: { item: Message }) => {
+  const renderMessage =  ({ item }: { item: Message }) => {
     const isMe = item.senderId === currentUserId;
     const aggregated = aggregateReactions(item.reactions ?? []);
 
@@ -798,8 +866,8 @@ const ChatScreen: React.FC = () => {
         <SwipeableMessage onSwipeRight={() => setReplyingTo(item)}>
           <TouchableOpacity
             activeOpacity={0.9}
-            onLongPress={(e) => { setReactionPickerMsg(item); setReactionPickerPos(e.nativeEvent.pageY); }}
-            onPress={() => handleDoubleTap(item)}
+            onLongPress={(e) => { if (item.pending) return; setReactionPickerMsg(item); setReactionPickerPos(e.nativeEvent.pageY); }}
+            onPress={() => (item.pending ? handlePendingPress(item) : handleDoubleTap(item))}
             delayLongPress={350}>
             <View style={[s.bubble, isMe ? s.bubbleMe : s.bubbleOther, item.photoUrl ? s.bubblePhoto : null, item.replyToId ? s.bubbleWithQuote : null]}>
               {/* Reply quote */}
@@ -865,15 +933,29 @@ const ChatScreen: React.FC = () => {
                 </TouchableOpacity>
               )}
               {/* Text */}
-              {item.message && !item.attachmentType ? renderMessageText(item.message, [s.msgText, item.photoUrl ? s.captionText : null, isMe ? { color: '#FFF' } : null]) : null}
+              {item.message && !item.attachmentType ? (
+                <>
+                  <LinkedText
+                    text={item.message}
+                    style={[s.msgText, item.photoUrl ? s.captionText : null, isMe ? { color: '#FFF' } : null]}
+                    linkColor={isMe ? '#FFF' : '#1a73e8'}
+                  />
+                  <LinkPreviewCard text={item.message} isMe={isMe} />
+                </>
+              ) : null}
               {/* Footer */}
               <View style={s.msgFooter}>
                 <RNText style={[s.msgTime, isMe && { color: 'rgba(255,255,255,0.7)' }]}>{formatTime(item.createdAt)}</RNText>
                 {isMe && (
-                  <MaterialIcons name={item.isRead ? 'done-all' : 'done'} size={14}
-                    color={item.isRead ? '#4FC3F7' : '#aaa'} style={{ marginLeft: 3 }} />
+                  item.pending
+                    ? <MaterialIcons name="schedule" size={14} color="rgba(255,255,255,0.85)" style={{ marginLeft: 3 }} />
+                    : <MaterialIcons name={item.isRead ? 'done-all' : 'done'} size={14}
+                        color={item.isRead ? '#4FC3F7' : '#aaa'} style={{ marginLeft: 3 }} />
                 )}
               </View>
+              {item.pending && (
+                <RNText style={s.pendingText}>En attente de connexion — touchez pour réessayer</RNText>
+              )}
             </View>
           </TouchableOpacity>
         </SwipeableMessage>
@@ -915,14 +997,12 @@ const ChatScreen: React.FC = () => {
       {/* Content area — keyboard handled by KeyboardAvoidingView */}
       <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
         {loading ? (
-          <View style={s.loadingContainer}>
-            <ActivityIndicator size="large" color={theme.primary} />
-          </View>
+          <MessagesLoading variant="chat" />
         ) : (<>
 
         <FlatList
           ref={flatListRef}
-          data={messages}
+          data={allMessages}
           renderItem={renderMessage}
           keyExtractor={item => item.id}
           contentContainerStyle={[s.messagesList, { paddingBottom: 8 }]}
@@ -949,11 +1029,24 @@ const ChatScreen: React.FC = () => {
             </TouchableOpacity>
           ) : null}
           ListEmptyComponent={
-            <View style={s.emptyContainer}>
-              <MaterialIcons name="chat-bubble-outline" size={40} color={Neutral[300]} />
-              <RNText style={s.emptyText}>Aucun message</RNText>
-              <RNText style={s.emptySubtext}>Commencez la conversation !</RNText>
-            </View>
+            serverLoaded ? (
+              <View style={s.emptyContainer}>
+                <MaterialIcons name="chat-bubble-outline" size={40} color={Neutral[300]} />
+                <RNText style={s.emptyText}>Aucun message</RNText>
+                <RNText style={s.emptySubtext}>Commencez la conversation !</RNText>
+              </View>
+            ) : networkError ? (
+              <View style={s.emptyContainer}>
+                <MaterialIcons name="cloud-off" size={40} color={Neutral[300]} />
+                <RNText style={s.emptyText}>Messages indisponibles</RNText>
+                <RNText style={s.emptySubtext}>Vos messages ne sont pas perdus, la connexion a échoué.</RNText>
+                <TouchableOpacity onPress={() => loadMessages()} style={{ marginTop: 12, padding: 8 }}>
+                  <RNText style={{ color: theme.primary, fontWeight: '600' }}>Réessayer</RNText>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <MessagesLoading variant="chat" />
+            )
           }
         />
 
@@ -1000,8 +1093,11 @@ const ChatScreen: React.FC = () => {
         </View>
         ) : (
         <View style={[s.inputBar, { paddingBottom: insets.bottom + 8 }]}>
-          <TouchableOpacity onPress={handlePickPhoto} style={s.photoBtn}>
+          <TouchableOpacity onPress={() => handlePickPhoto('library')} style={s.photoBtn}>
             <MaterialIcons name="image" size={26} color={theme.primary} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => handlePickPhoto('camera')} style={s.photoBtn}>
+            <MaterialIcons name="photo-camera" size={25} color={theme.primary} />
           </TouchableOpacity>
           <TouchableOpacity onPress={handlePickFile} style={s.photoBtn}>
             <MaterialIcons name="attach-file" size={24} color={theme.primary} />
@@ -1042,8 +1138,11 @@ const ChatScreen: React.FC = () => {
       {/* Lightbox */}
       <Modal visible={lightboxUri !== null} transparent animationType="fade" onRequestClose={() => setLightboxUri(null)}>
         <View style={s.lightboxOverlay}>
-          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setLightboxUri(null)} />
-          {lightboxUri && <AuthImage uri={lightboxUri} style={s.lightboxImage} resizeMode="contain" />}
+          {lightboxUri && (
+            <ZoomableView onSingleTap={() => setLightboxUri(null)}>
+              <AuthImage uri={lightboxUri} style={s.lightboxImage} resizeMode="contain" />
+            </ZoomableView>
+          )}
           <TouchableOpacity style={s.lightboxClose} onPress={() => setLightboxUri(null)}>
             <MaterialIcons name="close" size={22} color="#FFF" />
           </TouchableOpacity>
@@ -1282,6 +1381,7 @@ const styles = (theme: any) => StyleSheet.create({
   fileInfo: { flex: 1, marginHorizontal: 10 },
   fileName: { fontSize: 14, fontWeight: '600', color: theme.text },
   fileSize: { fontSize: 12, color: Neutral[600], marginTop: 2 },
+  pendingText: { fontSize: 10, fontStyle: 'italic', color: 'rgba(255,255,255,0.85)', textAlign: 'right', marginTop: 2 },
   input: {
     flex: 1,
     backgroundColor: Neutral[100],

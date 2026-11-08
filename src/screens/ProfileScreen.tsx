@@ -15,7 +15,9 @@ import {launchImageLibrary} from 'react-native-image-picker';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import {useTheme} from '../context/ThemeContext';
 import ScreenHeader from '../components/ScreenHeader';
+import LoadingView from '../components/LoadingView';
 import AuthService from '../services/AuthService';
+import {stopNotificationsForUser} from '../services/PushSetup';
 import {commitCredentials} from '../services/AutofillService';
 import {PASSWORD_REQUIREMENTS, getPasswordError} from '../utils/passwordPolicy';
 import StorageService from '../services/StorageService';
@@ -38,6 +40,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({navigation}) => {
   const [bio, setBio] = useState('');
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingProfile, setLoadingProfile] = useState(true);
   const [photoUri, setPhotoUri] = useState<string | undefined>(undefined);
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -51,6 +54,14 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({navigation}) => {
   }, []);
 
   const loadProfile = async () => {
+    try {
+      await loadProfileInner();
+    } finally {
+      setLoadingProfile(false);
+    }
+  };
+
+  const loadProfileInner = async () => {
     const account = await AuthService.getCurrentUser();
     if (account && account.profile) {
       setProfile(account.profile);
@@ -183,6 +194,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({navigation}) => {
           text: 'Déconnexion',
           style: 'destructive',
           onPress: async () => {
+            await stopNotificationsForUser();
             await AuthService.logout();
             navigation.replace('Login');
           },
@@ -400,6 +412,12 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({navigation}) => {
         </TouchableOpacity>
       </View>
       </ScrollView>
+      {(loadingProfile || loading || changingPassword) && (
+        <LoadingView
+          overlay
+          label={loadingProfile ? 'Chargement du profil…' : changingPassword ? 'Changement du mot de passe…' : 'Enregistrement…'}
+        />
+      )}
     </View>
   );
 };
